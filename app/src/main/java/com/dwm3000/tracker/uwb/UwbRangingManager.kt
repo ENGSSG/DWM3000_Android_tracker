@@ -1,4 +1,4 @@
-package com.example.pixeluwb.uwb
+package com.dwm3000.tracker.uwb
 
 import android.content.Context
 import android.util.Log
@@ -126,7 +126,7 @@ class UwbRangingManager(private val context: Context) {
                     subSessionKeyInfo = null,
                     complexChannel = ctrlScope.uwbComplexChannel,
                     peerDevices = peerDevices,
-                    updateRateType = RangingParameters.RANGING_UPDATE_RATE_AUTOMATIC
+                    updateRateType = RangingParameters.RANGING_UPDATE_RATE_FREQUENT
                 )
 
                 Log.d(TAG, "Starting Controller ranging session...")
@@ -180,7 +180,7 @@ class UwbRangingManager(private val context: Context) {
                     subSessionKeyInfo = null,
                     complexChannel = complexChannel,
                     peerDevices = listOf(controllerDevice),
-                    updateRateType = RangingParameters.RANGING_UPDATE_RATE_AUTOMATIC
+                    updateRateType = RangingParameters.RANGING_UPDATE_RATE_FREQUENT
                 )
 
                 Log.d(TAG, "Starting Controlee ranging session (ch=$channel, preamble=$preambleIndex)...")

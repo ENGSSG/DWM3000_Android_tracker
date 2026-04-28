@@ -6,14 +6,14 @@
     android:layout_height="match_parent"
     android:background="#000000">
 
-    <!-- Layer 0: Camera preview (fills entire screen) -->
+    <!-- Layer 0: Camera preview (Stage 2) -->
     <androidx.camera.view.PreviewView
         android:id="@+id/cameraPreview"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
-    <!-- Layer 1: AR reticle overlay (drawn on top of camera) -->
-    <com.example.pixeluwb.ui.ArOverlayView
+    <!-- Layer 1: AR reticle overlay (Stage 2) -->
+    <com.dwm3000.tracker.ui.ArOverlayView
         android:id="@+id/arOverlay"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
@@ -141,7 +141,7 @@
             android:layout_height="wrap_content"
             android:layout_marginBottom="8dp">
 
-            <com.example.pixeluwb.ui.RadarView
+            <com.dwm3000.tracker.ui.RadarView
                 android:id="@+id/radarView"
                 android:layout_width="140dp"
                 android:layout_height="140dp"

@@ -1,4 +1,4 @@
-package com.example.pixeluwb.ble
+package com.dwm3000.tracker.ble
 
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
@@ -13,7 +13,7 @@ import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.os.ParcelUuid
 import android.util.Log
-import com.example.pixeluwb.UwbSessionParams
+import com.dwm3000.tracker.UwbSessionParams
 
 /**
  * BLE Central (GATT Client) role — used by the "Controller" device.

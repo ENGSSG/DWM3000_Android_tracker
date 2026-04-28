@@ -1,4 +1,4 @@
-package com.example.pixeluwb.ui
+package com.dwm3000.tracker.ui
 
 import android.content.Context
 import android.hardware.Sensor

@@ -23,9 +23,9 @@
 
     <application
         android:allowBackup="false"
-        android:label="Pixel UWB Ranger"
+        android:label="DWM3000 Tracker"
         android:supportsRtl="true"
-        android:theme="@style/Theme.PixelUwb">
+        android:theme="@style/Theme.DWM3000Tracker">
 
         <activity
             android:name=".ui.MainActivity"

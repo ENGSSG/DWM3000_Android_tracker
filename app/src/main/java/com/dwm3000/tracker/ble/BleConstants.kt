@@ -1,4 +1,4 @@
-package com.example.pixeluwb.ble
+package com.dwm3000.tracker.ble
 
 import java.util.UUID
 

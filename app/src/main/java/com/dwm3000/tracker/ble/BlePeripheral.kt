@@ -1,4 +1,4 @@
-package com.example.pixeluwb.ble
+package com.dwm3000.tracker.ble
 
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
@@ -14,7 +14,7 @@ import android.bluetooth.le.AdvertiseSettings
 import android.content.Context
 import android.os.ParcelUuid
 import android.util.Log
-import com.example.pixeluwb.UwbSessionParams
+import com.dwm3000.tracker.UwbSessionParams
 
 
 /**

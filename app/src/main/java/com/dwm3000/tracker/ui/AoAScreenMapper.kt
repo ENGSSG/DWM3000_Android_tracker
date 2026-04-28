@@ -1,8 +1,8 @@
-package com.example.pixeluwb.ui
+package com.dwm3000.tracker.ui
 
 import android.graphics.PointF
 import android.util.Log
-import com.example.pixeluwb.CalibrationConfig
+import com.dwm3000.tracker.CalibrationConfig
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.max

@@ -1,4 +1,4 @@
-package com.example.pixeluwb.ui
+package com.dwm3000.tracker.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -18,16 +18,20 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
-import com.example.pixeluwb.UwbSessionParams
-import com.example.pixeluwb.ble.BleCentral
-import com.example.pixeluwb.ble.BlePeripheral
-import com.example.pixeluwb.databinding.ActivityMainBinding
-import com.example.pixeluwb.uwb.UwbRangingManager
+import com.dwm3000.tracker.UwbSessionParams
+import com.dwm3000.tracker.ble.BleCentral
+import com.dwm3000.tracker.ble.BlePeripheral
+import com.dwm3000.tracker.databinding.ActivityMainBinding
+import com.dwm3000.tracker.uwb.UwbRangingManager
 import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
 
-    companion object { private const val TAG = "MainActivity" }
+    companion object {
+        private const val TAG = "MainActivity"
+        // Stage 2: camera preview + AR reticle + radar enabled.
+        private const val STAGE_2 = true
+    }
 
     private lateinit var binding: ActivityMainBinding
     private var uwbRangingManager: UwbRangingManager? = null
@@ -46,7 +50,7 @@ class MainActivity : AppCompatActivity() {
     )
 
     private val permLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { r ->
-        if (r.all { it.value }) { updateStatus("Ready. Select a role."); startCamera() }
+        if (r.all { it.value }) { updateStatus("Ready. Select a role."); if (STAGE_2) startCamera() }
         else { updateStatus("Missing permissions."); Toast.makeText(this, "All permissions required", Toast.LENGTH_LONG).show() }
     }
 
@@ -60,22 +64,21 @@ class MainActivity : AppCompatActivity() {
 
         uwbRangingManager = UwbRangingManager(this)
 
-        // Camera FoV
-        CameraFovHelper.getRearCameraFov(this)?.let {
-            Log.d(TAG, "Camera FoV: H=${it.horizontalDeg} V=${it.verticalDeg}")
-            binding.arOverlay.mapper.setCameraFov(it.horizontalDeg, it.verticalDeg)
-        }
-
-        // Gravity sensor → continuous roll angle for UWB-to-screen mapping
-        gravitySensor = GravityRollSensor(this) { rollRad ->
-            binding.arOverlay.mapper.rollRad = rollRad
+        if (STAGE_2) {
+            CameraFovHelper.getRearCameraFov(this)?.let {
+                Log.d(TAG, "Camera FoV: H=${it.horizontalDeg} V=${it.verticalDeg}")
+                binding.arOverlay.mapper.setCameraFov(it.horizontalDeg, it.verticalDeg)
+            }
+            gravitySensor = GravityRollSensor(this) { rollRad ->
+                binding.arOverlay.mapper.rollRad = rollRad
+            }
         }
 
         binding.btnController.setOnClickListener { startAsController() }
         binding.btnControlee.setOnClickListener { startAsControlee() }
         binding.btnStop.setOnClickListener { stopEverything() }
 
-        if (hasAllPermissions()) { updateStatus("Ready. Select a role."); startCamera() }
+        if (hasAllPermissions()) { updateStatus("Ready. Select a role."); if (STAGE_2) startCamera() }
         else permLauncher.launch(requiredPermissions.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }.toTypedArray())
@@ -167,8 +170,10 @@ class MainActivity : AppCompatActivity() {
         binding.tvDistance.text = String.format("%.2f m", d.distanceMeters)
         binding.tvAzimuth.text = String.format("%.1f°", d.azimuthDegrees)
         binding.tvElevation.text = String.format("%.1f°", d.elevationDegrees)
-        binding.arOverlay.updatePosition(d.distanceMeters, d.azimuthDegrees, d.elevationDegrees)
-        binding.radarView.updatePosition(d.distanceMeters, d.azimuthDegrees)
+        if (STAGE_2) {
+            binding.arOverlay.updatePosition(d.distanceMeters, d.azimuthDegrees, d.elevationDegrees)
+            binding.radarView.updatePosition(d.distanceMeters, d.azimuthDegrees)
+        }
     }
 
     private fun updateStatus(m: String) { binding.tvStatus.text = m; Log.d(TAG, m) }
@@ -179,13 +184,14 @@ class MainActivity : AppCompatActivity() {
         binding.btnStop.visibility = if (on) View.GONE else View.VISIBLE
     }
     private fun onPeerLost() {
-        updateStatus("Peer disconnected"); binding.arOverlay.clearPeer(); binding.radarView.clearPeer()
+        updateStatus("Peer disconnected")
+        if (STAGE_2) { binding.arOverlay.clearPeer(); binding.radarView.clearPeer() }
         binding.tvDistance.text = "--.- m"; binding.tvAzimuth.text = "--.-°"; binding.tvElevation.text = "--.-°"
     }
     private fun stopEverything() {
         bleCentral?.stop(); blePeripheral?.stop(); uwbRangingManager?.stopRanging()
         bleCentral = null; blePeripheral = null
-        binding.arOverlay.clearPeer(); binding.radarView.clearPeer()
+        if (STAGE_2) { binding.arOverlay.clearPeer(); binding.radarView.clearPeer() }
         binding.tvDistance.text = "--.- m"; binding.tvAzimuth.text = "--.-°"; binding.tvElevation.text = "--.-°"
         showTelemetry(false); setButtonsEnabled(true); updateStatus("Stopped. Select a role.")
     }

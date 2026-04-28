@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.pixeluwb"
+    namespace = "com.dwm3000.tracker"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.example.pixeluwb"
+        applicationId = "com.dwm3000.tracker"
         minSdk = 33  // UWB APIs require API 33+
         targetSdk = 34
         versionCode = 1

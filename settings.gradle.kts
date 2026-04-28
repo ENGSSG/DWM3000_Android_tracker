@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "PixelUwb"
+rootProject.name = "DWM3000Tracker"
 include(":app")
