@@ -52,6 +52,9 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
     implementation("androidx.camera:camera-view:$cameraxVersion")
 
+    // YuNet face detection through OpenCV DNN / FaceDetectorYN
+    implementation("org.opencv:opencv:4.10.0")
+
     // Guava - Explicitly adding listenablefuture to resolve the "Cannot access class" error.
     implementation("com.google.guava:guava:33.0.0-android")
     implementation("com.google.guava:listenablefuture:1.0")

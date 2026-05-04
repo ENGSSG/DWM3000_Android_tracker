@@ -5,12 +5,14 @@ import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.os.Bundle
 import android.util.Log
+import android.util.Size
 import android.view.View
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
@@ -23,7 +25,11 @@ import com.dwm3000.tracker.ble.BleCentral
 import com.dwm3000.tracker.ble.BlePeripheral
 import com.dwm3000.tracker.databinding.ActivityMainBinding
 import com.dwm3000.tracker.uwb.UwbRangingManager
+import com.dwm3000.tracker.vision.FaceAnalysis
+import com.dwm3000.tracker.vision.GyroImageMotionSensor
 import kotlinx.coroutines.launch
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
 
@@ -31,6 +37,7 @@ class MainActivity : AppCompatActivity() {
         private const val TAG = "MainActivity"
         // Stage 2: camera preview + AR reticle + radar enabled.
         private const val STAGE_2 = true
+        private const val FACE_DETECTOR_INTERVAL_MS = 200L
     }
 
     private lateinit var binding: ActivityMainBinding
@@ -38,7 +45,11 @@ class MainActivity : AppCompatActivity() {
     private var bleCentral: BleCentral? = null
     private var blePeripheral: BlePeripheral? = null
     private var cameraPreview: Preview? = null
+    private var cameraAnalysis: ImageAnalysis? = null
+    private lateinit var cameraAnalysisExecutor: ExecutorService
     private var gravitySensor: GravityRollSensor? = null
+    private lateinit var imageMotionSensor: GyroImageMotionSensor
+    private lateinit var uwbImuFusion: UwbImuFusionManager
 
     private val sessionId = UwbSessionParams.generateSessionId()
     private val sessionKey = UwbSessionParams.generateSessionKey()
@@ -61,6 +72,11 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
         hideSystemBars()
+        cameraAnalysisExecutor = Executors.newSingleThreadExecutor()
+        imageMotionSensor = GyroImageMotionSensor(this)
+        uwbImuFusion = UwbImuFusionManager(this) { fused ->
+            renderTelemetry(fused)
+        }
 
         uwbRangingManager = UwbRangingManager(this)
 
@@ -68,6 +84,7 @@ class MainActivity : AppCompatActivity() {
             CameraFovHelper.getRearCameraFov(this)?.let {
                 Log.d(TAG, "Camera FoV: H=${it.horizontalDeg} V=${it.verticalDeg}")
                 binding.arOverlay.mapper.setCameraFov(it.horizontalDeg, it.verticalDeg)
+                imageMotionSensor.setCameraFov(it.horizontalDeg, it.verticalDeg)
             }
             gravitySensor = GravityRollSensor(this) { rollRad ->
                 binding.arOverlay.mapper.rollRad = rollRad
@@ -84,14 +101,21 @@ class MainActivity : AppCompatActivity() {
         }.toTypedArray())
     }
 
-    override fun onResume() { super.onResume(); gravitySensor?.start() }
-    override fun onPause() { super.onPause(); gravitySensor?.stop() }
-    override fun onDestroy() { super.onDestroy(); stopEverything() }
+    override fun onResume() { super.onResume(); gravitySensor?.start(); imageMotionSensor.start(); uwbImuFusion.start() }
+    override fun onPause() { super.onPause(); gravitySensor?.stop(); imageMotionSensor.stop(); uwbImuFusion.stop() }
+    override fun onDestroy() {
+        super.onDestroy()
+        stopEverything()
+        binding.faceBlurOverlay.clearDetections()
+        cameraAnalysisExecutor.shutdown()
+    }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         @Suppress("DEPRECATION")
         cameraPreview?.targetRotation = windowManager.defaultDisplay.rotation
+        @Suppress("DEPRECATION")
+        cameraAnalysis?.targetRotation = windowManager.defaultDisplay.rotation
         hideSystemBars()
     }
 
@@ -110,8 +134,24 @@ class MainActivity : AppCompatActivity() {
             val preview = Preview.Builder()
                 .setTargetRotation(windowManager.defaultDisplay.rotation)
                 .build().also { it.setSurfaceProvider(binding.cameraPreview.surfaceProvider) }
+            val analysis = ImageAnalysis.Builder()
+                .setTargetResolution(Size(640, 480))
+                .setTargetRotation(windowManager.defaultDisplay.rotation)
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build()
+                .also {
+                    it.setAnalyzer(
+                        cameraAnalysisExecutor,
+                        FaceAnalysis(this, imageMotionSensor, FACE_DETECTOR_INTERVAL_MS) { bitmap, faces, stats ->
+                            binding.faceBlurOverlay.post {
+                                binding.faceBlurOverlay.updateDetections(bitmap, faces, stats)
+                            }
+                        }
+                    )
+                }
             cameraPreview = preview
-            try { prov.unbindAll(); prov.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview) }
+            cameraAnalysis = analysis
+            try { prov.unbindAll(); prov.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis) }
             catch (e: Exception) { Log.e(TAG, "Camera failed", e) }
         }, ContextCompat.getMainExecutor(this))
     }
@@ -167,6 +207,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateTelemetry(d: UwbRangingManager.RangingData) {
+        renderTelemetry(uwbImuFusion.processUwb(d))
+    }
+
+    private fun renderTelemetry(d: UwbRangingManager.RangingData) {
         binding.tvDistance.text = String.format("%.2f m", d.distanceMeters)
         binding.tvAzimuth.text = String.format("%.1f°", d.azimuthDegrees)
         binding.tvElevation.text = String.format("%.1f°", d.elevationDegrees)
@@ -185,12 +229,14 @@ class MainActivity : AppCompatActivity() {
     }
     private fun onPeerLost() {
         updateStatus("Peer disconnected")
+        uwbImuFusion.reset()
         if (STAGE_2) { binding.arOverlay.clearPeer(); binding.radarView.clearPeer() }
         binding.tvDistance.text = "--.- m"; binding.tvAzimuth.text = "--.-°"; binding.tvElevation.text = "--.-°"
     }
     private fun stopEverything() {
         bleCentral?.stop(); blePeripheral?.stop(); uwbRangingManager?.stopRanging()
         bleCentral = null; blePeripheral = null
+        uwbImuFusion.reset()
         if (STAGE_2) { binding.arOverlay.clearPeer(); binding.radarView.clearPeer() }
         binding.tvDistance.text = "--.- m"; binding.tvAzimuth.text = "--.-°"; binding.tvElevation.text = "--.-°"
         showTelemetry(false); setButtonsEnabled(true); updateStatus("Stopped. Select a role.")

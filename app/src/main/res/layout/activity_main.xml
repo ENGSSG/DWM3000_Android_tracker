@@ -12,13 +12,19 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
-    <!-- Layer 1: AR reticle overlay (Stage 2) -->
+    <!-- Layer 1: YuNet face anonymization overlay -->
+    <com.dwm3000.tracker.ui.FaceBlurOverlayView
+        android:id="@+id/faceBlurOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- Layer 2: AR reticle overlay (Stage 2) -->
     <com.dwm3000.tracker.ui.ArOverlayView
         android:id="@+id/arOverlay"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
-    <!-- Layer 2: Top HUD — status + telemetry (semi-transparent) -->
+    <!-- Layer 3: Top HUD — status + telemetry (semi-transparent) -->
     <LinearLayout
         android:id="@+id/hudTop"
         android:layout_width="match_parent"
@@ -126,7 +132,7 @@
         </LinearLayout>
     </LinearLayout>
 
-    <!-- Layer 3: Bottom controls -->
+    <!-- Layer 4: Bottom controls -->
     <LinearLayout
         android:id="@+id/hudBottom"
         android:layout_width="match_parent"
