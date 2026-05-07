@@ -19,7 +19,6 @@ class ArOverlayView @JvmOverloads constructor(
 
     private var dist = 0f; private var az = 0f; private var el = 0f
     private var hasPeer = false; private var pulse = 0f
-    private var sx = 0f; private var sy = 0f; private var first = true
 
     private val outerP = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#00FF88"); style = Paint.Style.STROKE; strokeWidth = 3f }
     private val innerP = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#00FF88"); style = Paint.Style.STROKE; strokeWidth = 2f }
@@ -36,7 +35,7 @@ class ArOverlayView @JvmOverloads constructor(
         pulse = (pulse + 0.08f) % 1f; invalidate()
     }
 
-    fun clearPeer() { hasPeer = false; first = true; invalidate() }
+    fun clearPeer() { hasPeer = false; invalidate() }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
@@ -45,10 +44,8 @@ class ArOverlayView @JvmOverloads constructor(
         val inFov = mapper.isInFov(az, el)
         val pos = mapper.mapToScreen(az, el, dist, width, height)
 
-        if (first) { sx = pos.x; sy = pos.y; first = false }
-        else { sx += 0.3f * (pos.x - sx); sy += 0.3f * (pos.y - sy) }
-
-        if (inFov) drawReticle(canvas, sx, sy) else drawEdgeArrow(canvas, sx, sy)
+        // Draw the fused position directly; filtering belongs in UWB/IMU fusion.
+        if (inFov) drawReticle(canvas, pos.x, pos.y) else drawEdgeArrow(canvas, pos.x, pos.y)
     }
 
     private fun drawReticle(canvas: Canvas, cx: Float, cy: Float) {
