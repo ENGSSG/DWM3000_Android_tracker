@@ -2,68 +2,84 @@ package com.dwm3000.tracker.vision
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.ImageFormat
 import android.graphics.Matrix
-import android.graphics.Rect
-import android.graphics.RectF
-import android.graphics.YuvImage
+import android.util.Log
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
-import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
 import kotlin.math.max
+import kotlin.math.min
 
 class FaceAnalysis(
     context: Context,
-    private val motionSensor: GyroImageMotionSensor,
-    private val detectorIntervalMs: Long = 200L,
     private val onResult: (Bitmap, List<DetectedFace>, FaceDetectionStats) -> Unit
-) : ImageAnalysis.Analyzer {
+) : ImageAnalysis.Analyzer, AutoCloseable {
 
-    private val detector = YuNetFaceDetector(context.applicationContext)
-    private var lastDetectionNs = 0L
+    private val primaryDetector: FaceDetectorBackend
+    private val fallbackDetector: FaceDetectorBackend
     private var lastFrameNs = 0L
     private var smoothedFps = 0f
+    private var lastConversionMs = 0f
     private var lastInferenceMs = 0f
-    private var lastFaces: List<DetectedFace> = emptyList()
+    private var lastTotalAnalysisMs = 0f
+    private var activeDetectorName = ""
+
+    init {
+        val appContext = context.applicationContext
+        fallbackDetector = MediaPipeFaceDetector(
+            appContext,
+            modelAssetPath = MediaPipeFaceDetector.SHORT_RANGE_MODEL_ASSET,
+            enableFallback = false
+        )
+        primaryDetector = try {
+            YuNetFaceDetector(appContext)
+        } catch (e: Exception) {
+            Log.e(TAG, "YuNet unavailable. Falling back to MediaPipe.", e)
+            fallbackDetector
+        }
+        activeDetectorName = primaryDetector.name
+    }
 
     override fun analyze(image: ImageProxy) {
+        val totalStartNs = System.nanoTime()
         val frameNs = image.imageInfo.timestamp
+        var resultBitmap: Bitmap? = null
+        var imageClosed = false
         try {
             updateFps(frameNs)
 
-            val bitmap = image.toUprightBitmap()
-            val shouldDetect = frameNs - lastDetectionNs >= detectorIntervalMs * 1_000_000L
-            val imuShift = motionSensor.consumePixelShiftUntil(frameNs, bitmap.width, bitmap.height)
-
-            if (!shouldDetect && lastFaces.isNotEmpty()) {
-                lastFaces = lastFaces.translate(imuShift.x, imuShift.y, bitmap.width, bitmap.height)
-            }
-
-            if (shouldDetect) {
-                val startNs = System.nanoTime()
-                lastFaces = detector.detect(bitmap)
-                lastInferenceMs = (System.nanoTime() - startNs) / 1_000_000f
-                lastDetectionNs = frameNs
-            }
+            val conversionStartNs = System.nanoTime()
+            val bitmap = image.toUprightRgbaBitmap()
+            lastConversionMs = (System.nanoTime() - conversionStartNs) / 1_000_000f
+            image.close()
+            imageClosed = true
+            resultBitmap = bitmap
+            val startNs = System.nanoTime()
+            val detectedFaces = detectFaces(bitmap)
+            lastInferenceMs = (System.nanoTime() - startNs) / 1_000_000f
+            lastTotalAnalysisMs = (System.nanoTime() - totalStartNs) / 1_000_000f
 
             onResult(
                 bitmap,
-                lastFaces,
+                detectedFaces,
                 FaceDetectionStats(
-                    detectorName = detector.name,
+                    detectorName = activeDetectorName,
                     frameFps = smoothedFps,
+                    frameWidth = bitmap.width,
+                    frameHeight = bitmap.height,
+                    conversionMs = lastConversionMs,
                     inferenceMs = lastInferenceMs,
-                    faceCount = lastFaces.size,
-                    detectorIntervalMs = detectorIntervalMs,
-                    imuShiftX = imuShift.x,
-                    imuShiftY = imuShift.y
+                    totalAnalysisMs = lastTotalAnalysisMs,
+                    faceCount = detectedFaces.size,
+                    faceSource = "CNN"
                 )
             )
-        } catch (_: Exception) {
-            // Keep the camera stream alive even if a single frame conversion fails.
+            resultBitmap = null
+        } catch (e: Exception) {
+            resultBitmap?.recycle()
+            Log.e(TAG, "Face analysis failed", e)
         } finally {
-            image.close()
+            if (!imageClosed) image.close()
         }
     }
 
@@ -75,12 +91,35 @@ class FaceAnalysis(
         lastFrameNs = frameNs
     }
 
-    private fun ImageProxy.toUprightBitmap(): Bitmap {
-        val nv21 = toNv21()
-        val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
-        val jpeg = ByteArrayOutputStream()
-        yuvImage.compressToJpeg(Rect(0, 0, width, height), 75, jpeg)
-        val bitmap = BitmapFactory.decodeByteArray(jpeg.toByteArray(), 0, jpeg.size())
+    private fun detectFaces(bitmap: Bitmap): List<DetectedFace> {
+        activeDetectorName = primaryDetector.name
+        return primaryDetector.detect(bitmap)
+    }
+
+    private fun ImageProxy.toUprightRgbaBitmap(): Bitmap {
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val plane = planes[0]
+        val source = plane.buffer
+        source.rewind()
+
+        val rowStride = plane.rowStride
+        val pixelStride = plane.pixelStride
+        val packedRowBytes = width * 4
+
+        if (pixelStride == 4 && rowStride == packedRowBytes) {
+            bitmap.copyPixelsFromBuffer(source)
+        } else {
+            val packed = ByteBuffer.allocateDirect(width * height * 4)
+            val row = ByteArray(rowStride)
+            for (y in 0 until height) {
+                source.position(y * rowStride)
+                source.get(row, 0, min(rowStride, source.remaining()))
+                packed.put(row, 0, packedRowBytes)
+            }
+            packed.rewind()
+            bitmap.copyPixelsFromBuffer(packed)
+        }
+
         val rotation = imageInfo.rotationDegrees
         if (rotation == 0) return bitmap
 
@@ -90,53 +129,12 @@ class FaceAnalysis(
         return rotated
     }
 
-    private fun ImageProxy.toNv21(): ByteArray {
-        val yPlane = planes[0]
-        val uPlane = planes[1]
-        val vPlane = planes[2]
-        val out = ByteArray(width * height * 3 / 2)
-
-        var outputOffset = 0
-        for (row in 0 until height) {
-            val inputOffset = row * yPlane.rowStride
-            for (col in 0 until width) {
-                out[outputOffset++] = yPlane.buffer.get(inputOffset + col)
-            }
-        }
-
-        val chromaHeight = height / 2
-        val chromaWidth = width / 2
-        val uBuffer = uPlane.buffer
-        val vBuffer = vPlane.buffer
-        for (row in 0 until chromaHeight) {
-            for (col in 0 until chromaWidth) {
-                val vuIndex = width * height + row * width + col * 2
-                val vIndex = row * vPlane.rowStride + col * vPlane.pixelStride
-                val uIndex = row * uPlane.rowStride + col * uPlane.pixelStride
-                out[vuIndex] = vBuffer.get(vIndex)
-                out[vuIndex + 1] = uBuffer.get(uIndex)
-            }
-        }
-
-        return out
+    override fun close() {
+        primaryDetector.close()
+        if (primaryDetector !== fallbackDetector) fallbackDetector.close()
     }
 
-    private fun List<DetectedFace>.translate(dx: Float, dy: Float, imageWidth: Int, imageHeight: Int): List<DetectedFace> {
-        if (kotlin.math.abs(dx) < 0.1f && kotlin.math.abs(dy) < 0.1f) return this
-        return map { face ->
-            val shiftedBox = face.bbox.translateClamped(dx, dy, imageWidth, imageHeight)
-            val shiftedLandmarks = face.landmarks.map { (x, y) ->
-                (x + dx).coerceIn(0f, imageWidth.toFloat()) to (y + dy).coerceIn(0f, imageHeight.toFloat())
-            }
-            face.copy(bbox = shiftedBox, landmarks = shiftedLandmarks)
-        }
-    }
-
-    private fun RectF.translateClamped(dx: Float, dy: Float, imageWidth: Int, imageHeight: Int): RectF {
-        val width = width()
-        val height = height()
-        val left = (left + dx).coerceIn(0f, (imageWidth - width).coerceAtLeast(0f))
-        val top = (top + dy).coerceIn(0f, (imageHeight - height).coerceAtLeast(0f))
-        return RectF(left, top, left + width, top + height)
+    companion object {
+        private const val TAG = "FaceAnalysis"
     }
 }

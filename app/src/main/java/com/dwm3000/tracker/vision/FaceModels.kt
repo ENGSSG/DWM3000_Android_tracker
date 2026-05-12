@@ -11,9 +11,11 @@ data class DetectedFace(
 data class FaceDetectionStats(
     val detectorName: String,
     val frameFps: Float,
+    val frameWidth: Int,
+    val frameHeight: Int,
+    val conversionMs: Float,
     val inferenceMs: Float,
+    val totalAnalysisMs: Float,
     val faceCount: Int,
-    val detectorIntervalMs: Long,
-    val imuShiftX: Float = 0f,
-    val imuShiftY: Float = 0f
+    val faceSource: String = "CNN"
 )

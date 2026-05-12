@@ -13,7 +13,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.Preview
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
@@ -24,9 +25,9 @@ import com.dwm3000.tracker.UwbSessionParams
 import com.dwm3000.tracker.ble.BleCentral
 import com.dwm3000.tracker.ble.BlePeripheral
 import com.dwm3000.tracker.databinding.ActivityMainBinding
+import com.dwm3000.tracker.fusion.UwbImuFusionManager
 import com.dwm3000.tracker.uwb.UwbRangingManager
 import com.dwm3000.tracker.vision.FaceAnalysis
-import com.dwm3000.tracker.vision.GyroImageMotionSensor
 import kotlinx.coroutines.launch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -35,20 +36,19 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "MainActivity"
-        // Stage 2: camera preview + AR reticle + radar enabled.
+        // Stage 2: privacy-processed camera image + AR reticle + radar enabled.
         private const val STAGE_2 = true
-        private const val FACE_DETECTOR_INTERVAL_MS = 200L
+        private val FACE_ANALYSIS_SIZE = Size(640, 480)
     }
 
     private lateinit var binding: ActivityMainBinding
     private var uwbRangingManager: UwbRangingManager? = null
     private var bleCentral: BleCentral? = null
     private var blePeripheral: BlePeripheral? = null
-    private var cameraPreview: Preview? = null
     private var cameraAnalysis: ImageAnalysis? = null
+    private var faceAnalysis: FaceAnalysis? = null
     private lateinit var cameraAnalysisExecutor: ExecutorService
     private var gravitySensor: GravityRollSensor? = null
-    private lateinit var imageMotionSensor: GyroImageMotionSensor
     private lateinit var uwbImuFusion: UwbImuFusionManager
 
     private val sessionId = UwbSessionParams.generateSessionId()
@@ -72,8 +72,8 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
         hideSystemBars()
+        binding.hudTop.post { updateFaceStatsPosition() }
         cameraAnalysisExecutor = Executors.newSingleThreadExecutor()
-        imageMotionSensor = GyroImageMotionSensor(this)
         uwbImuFusion = UwbImuFusionManager(this) { fused ->
             renderTelemetry(fused)
         }
@@ -84,7 +84,6 @@ class MainActivity : AppCompatActivity() {
             CameraFovHelper.getRearCameraFov(this)?.let {
                 Log.d(TAG, "Camera FoV: H=${it.horizontalDeg} V=${it.verticalDeg}")
                 binding.arOverlay.mapper.setCameraFov(it.horizontalDeg, it.verticalDeg)
-                imageMotionSensor.setCameraFov(it.horizontalDeg, it.verticalDeg)
             }
             gravitySensor = GravityRollSensor(this) { rollRad ->
                 binding.arOverlay.mapper.rollRad = rollRad
@@ -101,22 +100,24 @@ class MainActivity : AppCompatActivity() {
         }.toTypedArray())
     }
 
-    override fun onResume() { super.onResume(); gravitySensor?.start(); imageMotionSensor.start(); uwbImuFusion.start() }
-    override fun onPause() { super.onPause(); gravitySensor?.stop(); imageMotionSensor.stop(); uwbImuFusion.stop() }
+    override fun onResume() { super.onResume(); gravitySensor?.start(); uwbImuFusion.start() }
+    override fun onPause() { super.onPause(); gravitySensor?.stop(); uwbImuFusion.stop() }
     override fun onDestroy() {
         super.onDestroy()
         stopEverything()
         binding.faceBlurOverlay.clearDetections()
+        cameraAnalysis?.clearAnalyzer()
+        faceAnalysis?.close()
+        faceAnalysis = null
         cameraAnalysisExecutor.shutdown()
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         @Suppress("DEPRECATION")
-        cameraPreview?.targetRotation = windowManager.defaultDisplay.rotation
-        @Suppress("DEPRECATION")
         cameraAnalysis?.targetRotation = windowManager.defaultDisplay.rotation
         hideSystemBars()
+        binding.hudTop.post { updateFaceStatsPosition() }
     }
 
     private fun hideSystemBars() {
@@ -131,27 +132,37 @@ class MainActivity : AppCompatActivity() {
         val f = ProcessCameraProvider.getInstance(this)
         f.addListener({
             val prov = f.get()
-            val preview = Preview.Builder()
-                .setTargetRotation(windowManager.defaultDisplay.rotation)
-                .build().also { it.setSurfaceProvider(binding.cameraPreview.surfaceProvider) }
+            cameraAnalysis?.clearAnalyzer()
+            faceAnalysis?.close()
+            faceAnalysis = null
+            val resolutionSelector = ResolutionSelector.Builder()
+                .setResolutionStrategy(
+                    ResolutionStrategy(
+                        FACE_ANALYSIS_SIZE,
+                        ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER
+                    )
+                )
+                .build()
             val analysis = ImageAnalysis.Builder()
-                .setTargetResolution(Size(640, 480))
+                .setResolutionSelector(resolutionSelector)
                 .setTargetRotation(windowManager.defaultDisplay.rotation)
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                 .build()
                 .also {
+                    val analyzer = FaceAnalysis(this) { bitmap, faces, stats ->
+                        binding.faceBlurOverlay.post {
+                            binding.faceBlurOverlay.updateDetections(bitmap, faces, stats)
+                        }
+                    }
+                    faceAnalysis = analyzer
                     it.setAnalyzer(
                         cameraAnalysisExecutor,
-                        FaceAnalysis(this, imageMotionSensor, FACE_DETECTOR_INTERVAL_MS) { bitmap, faces, stats ->
-                            binding.faceBlurOverlay.post {
-                                binding.faceBlurOverlay.updateDetections(bitmap, faces, stats)
-                            }
-                        }
+                        analyzer
                     )
                 }
-            cameraPreview = preview
             cameraAnalysis = analysis
-            try { prov.unbindAll(); prov.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis) }
+            try { prov.unbindAll(); prov.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, analysis) }
             catch (e: Exception) { Log.e(TAG, "Camera failed", e) }
         }, ContextCompat.getMainExecutor(this))
     }
@@ -221,7 +232,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateStatus(m: String) { binding.tvStatus.text = m; Log.d(TAG, m) }
-    private fun showTelemetry(on: Boolean) { binding.llTelemetry.visibility = if (on) View.VISIBLE else View.GONE }
+    private fun showTelemetry(on: Boolean) {
+        binding.llTelemetry.visibility = if (on) View.VISIBLE else View.GONE
+        binding.hudTop.post { updateFaceStatsPosition() }
+    }
+
+    private fun updateFaceStatsPosition() {
+        binding.faceBlurOverlay.setStatsTopInset(binding.hudTop.bottom.toFloat())
+    }
     private fun setButtonsEnabled(on: Boolean) {
         binding.btnController.isEnabled = on; binding.btnControlee.isEnabled = on
         binding.llButtons.visibility = if (on) View.VISIBLE else View.GONE

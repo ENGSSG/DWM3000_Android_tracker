@@ -20,10 +20,16 @@ class FaceBlurOverlayView @JvmOverloads constructor(
     private var frameBitmap: Bitmap? = null
     private var faces: List<DetectedFace> = emptyList()
     private var stats: FaceDetectionStats? = null
+    private var statsTopInsetPx = 0f
 
     private val srcRect = Rect()
     private val tinyRect = Rect()
+    private val imageRect = RectF()
     private val mappedRect = RectF()
+    private val framePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        isFilterBitmap = true
+        isDither = true
+    }
     private val boxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#FFFFD54F")
         style = Paint.Style.STROKE
@@ -40,7 +46,7 @@ class FaceBlurOverlayView @JvmOverloads constructor(
     }
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
-        textSize = 28f
+        textSize = 23f
         setShadowLayer(5f, 0f, 2f, Color.BLACK)
     }
     private val panelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -66,6 +72,12 @@ class FaceBlurOverlayView @JvmOverloads constructor(
         invalidate()
     }
 
+    fun setStatsTopInset(topInsetPx: Float) {
+        if (statsTopInsetPx == topInsetPx) return
+        statsTopInsetPx = topInsetPx
+        invalidate()
+    }
+
     override fun onDetachedFromWindow() {
         clearDetections()
         super.onDetachedFromWindow()
@@ -76,6 +88,12 @@ class FaceBlurOverlayView @JvmOverloads constructor(
         val bitmap = frameBitmap ?: return
         if (bitmap.isRecycled || width <= 0 || height <= 0) return
 
+        canvas.drawColor(Color.BLACK)
+        srcRect.set(0, 0, bitmap.width, bitmap.height)
+        mapImageToViewRect(bitmap.width, bitmap.height, imageRect)
+        canvas.drawBitmap(bitmap, srcRect, imageRect, framePaint)
+
+        var drewFacePatch = false
         faces.forEach { face ->
             val expanded = face.bbox.expand(0.22f, 0.32f, bitmap.width, bitmap.height)
             expanded.roundOut(srcRect)
@@ -83,11 +101,21 @@ class FaceBlurOverlayView @JvmOverloads constructor(
 
             mapImageRectToView(expanded, bitmap.width, bitmap.height, mappedRect)
             drawPixelatedFace(canvas, bitmap, srcRect, mappedRect)
+            drewFacePatch = true
             canvas.drawRect(mappedRect, boxPaint)
             drawLandmarks(canvas, face, bitmap.width, bitmap.height)
         }
 
-        drawStats(canvas)
+        if (!drewFacePatch && PRIVACY_FAIL_CLOSED) {
+            srcRect.set(0, 0, bitmap.width, bitmap.height)
+            drawPixelatedFace(canvas, bitmap, srcRect, imageRect)
+        }
+
+        drawStats(
+            canvas,
+            drewFacePatch,
+            fullFrameCensored = !drewFacePatch && PRIVACY_FAIL_CLOSED
+        )
     }
 
     private fun drawPixelatedFace(canvas: Canvas, bitmap: Bitmap, source: Rect, destination: RectF) {
@@ -109,22 +137,42 @@ class FaceBlurOverlayView @JvmOverloads constructor(
         }
     }
 
-    private fun drawStats(canvas: Canvas) {
+    private fun drawStats(canvas: Canvas, drewFacePatch: Boolean, fullFrameCensored: Boolean) {
         val s = stats ?: return
-        val top = height - 92f
-        canvas.drawRect(12f, top, width.coerceAtMost(460).toFloat(), height - 18f, panelPaint)
+        val left = 12f
+        val top = (statsTopInsetPx + 8f).coerceAtMost((height - STATS_PANEL_HEIGHT - 12f).coerceAtLeast(12f))
+        val right = width.coerceAtMost(760).toFloat()
+        canvas.drawRect(left, top, right, top + STATS_PANEL_HEIGHT, panelPaint)
         canvas.drawText(
-            "${s.detectorName} ${s.faceCount} face(s)  ${s.inferenceMs.format1()} ms",
+            "${s.detectorName} ${s.faceCount} face(s) ${s.frameWidth}x${s.frameHeight}",
             24f,
             top + 30f,
             textPaint
         )
         canvas.drawText(
-            "Camera ${s.frameFps.format1()} FPS  IMU ${s.imuShiftX.format1()},${s.imuShiftY.format1()} px",
+            "Convert ${s.conversionMs.format1()} ms  CNN ${s.inferenceMs.format1()} ms  Total ${s.totalAnalysisMs.format1()} ms",
             24f,
             top + 62f,
             textPaint
         )
+        val privacyText = when {
+            fullFrameCensored -> "Full-frame privacy"
+            drewFacePatch -> "Face patch"
+            else -> "No face patch"
+        }
+        canvas.drawText(
+            "$privacyText  Camera ${s.frameFps.format1()} FPS",
+            24f,
+            top + 94f,
+            textPaint
+        )
+    }
+
+    private fun mapImageToViewRect(imageWidth: Int, imageHeight: Int, out: RectF) {
+        val scale = max(width / imageWidth.toFloat(), height / imageHeight.toFloat())
+        val dx = (width - imageWidth * scale) / 2f
+        val dy = (height - imageHeight * scale) / 2f
+        out.set(dx, dy, dx + imageWidth * scale, dy + imageHeight * scale)
     }
 
     private fun mapImageRectToView(source: RectF, imageWidth: Int, imageHeight: Int, out: RectF) {
@@ -151,4 +199,9 @@ class FaceBlurOverlayView @JvmOverloads constructor(
     }
 
     private fun Float.format1(): String = String.format("%.1f", this)
+
+    companion object {
+        private const val PRIVACY_FAIL_CLOSED = false
+        private const val STATS_PANEL_HEIGHT = 106f
+    }
 }

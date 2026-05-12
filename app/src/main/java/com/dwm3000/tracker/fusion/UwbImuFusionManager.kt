@@ -1,4 +1,4 @@
-package com.dwm3000.tracker.ui
+package com.dwm3000.tracker.fusion
 
 import android.content.Context
 import android.hardware.Sensor

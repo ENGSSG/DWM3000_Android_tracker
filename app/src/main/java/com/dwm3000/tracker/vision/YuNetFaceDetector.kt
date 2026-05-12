@@ -8,108 +8,91 @@ import org.opencv.android.OpenCVLoader
 import org.opencv.android.Utils
 import org.opencv.core.Mat
 import org.opencv.core.Size
-import org.opencv.dnn.Dnn
 import org.opencv.imgproc.Imgproc
 import org.opencv.objdetect.FaceDetectorYN
-import java.io.File
 
-class YuNetFaceDetector(
-    context: Context,
-    private val scoreThreshold: Float = 0.72f,
-    private val nmsThreshold: Float = 0.3f,
-    private val topK: Int = 5000
-) {
-    companion object {
-        private const val TAG = "YuNetFaceDetector"
-        private const val MODEL_ASSET = "models/face_detection_yunet_2023mar_int8.onnx"
-        private const val MODEL_FILE = "face_detection_yunet_2023mar_int8.onnx"
-    }
+class YuNetFaceDetector(context: Context) : FaceDetectorBackend {
 
-    private val modelPath = copyModelToFiles(context)
-    private var detector: FaceDetectorYN? = null
-    private var inputWidth = 0
-    private var inputHeight = 0
+    override val name: String = "OpenCV YuNet"
 
-    val name = "YuNet"
+    private val detector: FaceDetectorYN
 
     init {
-        check(OpenCVLoader.initLocal() || OpenCVLoader.initDebug()) {
-            "OpenCV native library failed to initialize"
-        }
+        check(OpenCVLoader.initLocal()) { "OpenCV initialization failed" }
+        val model = AssetFiles.copyToCache(context.applicationContext, MODEL_ASSET)
+        detector = FaceDetectorYN.create(
+            model.absolutePath,
+            "",
+            Size(320.0, 320.0),
+            SCORE_THRESHOLD,
+            NMS_THRESHOLD,
+            TOP_K
+        )
     }
 
-    fun detect(bitmap: Bitmap): List<DetectedFace> {
-        ensureDetector(bitmap.width, bitmap.height)
-
-        val rgba = Mat()
-        val bgr = Mat()
+    override fun detect(bitmap: Bitmap): List<DetectedFace> {
+        val image = Mat()
         val faces = Mat()
         return try {
-            Utils.bitmapToMat(bitmap, rgba)
-            Imgproc.cvtColor(rgba, bgr, Imgproc.COLOR_RGBA2BGR)
-            detector?.detect(bgr, faces)
-            parseFaces(faces)
+            Utils.bitmapToMat(bitmap, image)
+            Imgproc.cvtColor(image, image, Imgproc.COLOR_RGBA2BGR)
+
+            val width = image.cols()
+            val height = image.rows()
+            detector.setInputSize(Size(width.toDouble(), height.toDouble()))
+            detector.detect(image, faces)
+
+            buildList {
+                for (row in 0 until faces.rows()) {
+                    if (faces.cols() < MIN_FACE_COLUMNS) continue
+
+                    val x = faces.valueAt(row, 0).toFloat()
+                    val y = faces.valueAt(row, 1).toFloat()
+                    val boxWidth = faces.valueAt(row, 2).toFloat()
+                    val boxHeight = faces.valueAt(row, 3).toFloat()
+                    val score = faces.valueAt(row, faces.cols() - 1).toFloat()
+                    if (score < SCORE_THRESHOLD) continue
+
+                    val bbox = RectF(
+                        x.coerceIn(0f, width.toFloat()),
+                        y.coerceIn(0f, height.toFloat()),
+                        (x + boxWidth).coerceIn(0f, width.toFloat()),
+                        (y + boxHeight).coerceIn(0f, height.toFloat())
+                    )
+                    if (bbox.width() <= 1f || bbox.height() <= 1f) continue
+
+                    add(
+                        DetectedFace(
+                            bbox = bbox,
+                            score = score
+                        )
+                    )
+                }
+            }
         } catch (e: Exception) {
             Log.e(TAG, "YuNet detection failed", e)
             emptyList()
         } finally {
-            rgba.release()
-            bgr.release()
+            image.release()
             faces.release()
         }
     }
 
-    private fun ensureDetector(width: Int, height: Int) {
-        if (detector == null) {
-            detector = FaceDetectorYN.create(
-                modelPath,
-                "",
-                Size(width.toDouble(), height.toDouble()),
-                scoreThreshold,
-                nmsThreshold,
-                topK,
-                Dnn.DNN_BACKEND_OPENCV,
-                Dnn.DNN_TARGET_CPU
-            )
-            inputWidth = width
-            inputHeight = height
-            return
-        }
-
-        if (width != inputWidth || height != inputHeight) {
-            detector?.setInputSize(Size(width.toDouble(), height.toDouble()))
-            inputWidth = width
-            inputHeight = height
-        }
+    override fun close() {
+        // OpenCV Java bindings do not expose a close hook for FaceDetectorYN.
     }
 
-    private fun parseFaces(faces: Mat): List<DetectedFace> {
-        if (faces.empty() || faces.cols() < 15) return emptyList()
-
-        val out = ArrayList<DetectedFace>(faces.rows())
-        for (row in 0 until faces.rows()) {
-            val x = faces.get(row, 0)[0].toFloat()
-            val y = faces.get(row, 1)[0].toFloat()
-            val w = faces.get(row, 2)[0].toFloat()
-            val h = faces.get(row, 3)[0].toFloat()
-            val score = faces.get(row, 14)[0].toFloat()
-            val landmarks = (0 until 5).map { i ->
-                faces.get(row, 4 + i * 2)[0].toFloat() to faces.get(row, 5 + i * 2)[0].toFloat()
-            }
-            out += DetectedFace(RectF(x, y, x + w, y + h), score, landmarks)
-        }
-        return out
+    private fun Mat.valueAt(row: Int, col: Int): Double {
+        val value = get(row, col)
+        return if (value == null || value.isEmpty()) 0.0 else value[0]
     }
 
-    private fun copyModelToFiles(context: Context): String {
-        val outFile = File(context.filesDir, MODEL_FILE)
-        if (outFile.exists() && outFile.length() > 0) return outFile.absolutePath
-
-        context.assets.open(MODEL_ASSET).use { input ->
-            outFile.outputStream().use { output ->
-                input.copyTo(output)
-            }
-        }
-        return outFile.absolutePath
+    companion object {
+        private const val TAG = "YuNetFaceDetector"
+        private const val MODEL_ASSET = "models/face_detection_yunet_2023mar.onnx"
+        private const val SCORE_THRESHOLD = 0.5f
+        private const val NMS_THRESHOLD = 0.3f
+        private const val TOP_K = 5000
+        private const val MIN_FACE_COLUMNS = 5
     }
 }

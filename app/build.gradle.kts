@@ -19,6 +19,10 @@ android {
         viewBinding = true
     }
 
+    androidResources {
+        noCompress += listOf("tflite", "onnx")
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -52,7 +56,10 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
     implementation("androidx.camera:camera-view:$cameraxVersion")
 
-    // YuNet face detection through OpenCV DNN / FaceDetectorYN
+    // BlazeFace face detection through MediaPipe Tasks.
+    implementation("com.google.mediapipe:tasks-vision:0.10.35")
+
+    // YuNet face detection through OpenCV.
     implementation("org.opencv:opencv:4.10.0")
 
     // Guava - Explicitly adding listenablefuture to resolve the "Cannot access class" error.

@@ -18,8 +18,8 @@ import kotlin.math.tan
  *   +azimuth  → body RIGHT (toward body +X in portrait; confirmed on Pixel 8/9 Pro)
  *   +elevation → body UP (toward body +Y in portrait)
  *
- * The camera preview (CameraX + PreviewView) is always displayed so that
- * "physical up" = "screen up". This means the preview IMAGE rotates with
+ * The privacy-processed camera image is displayed so that
+ * "physical up" = "screen up". This means the camera IMAGE rotates with
  * the phone, but the UWB ANGLES do not — they stay in the body frame.
  *
  * ━━━ CONTINUOUS ROTATION ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -28,7 +28,7 @@ import kotlin.math.tan
  *   θ = atan2(gx, -gy)
  *   portrait: θ ≈ 0°, landscape (top-right): θ ≈ +90°, landscape (top-left): θ ≈ -90°
  *
- * Then project and apply inverse rotation R(-θ) to match CameraX's rotated preview:
+ * Then project and apply inverse rotation R(-θ) to match CameraX's rotated analysis frame:
  *   tx = tan(Az), ty = tan(El)
  *   screen_x = f·( tx·cos(θ) + ty·sin(θ))
  *   screen_y = f·(-tx·sin(θ) + ty·cos(θ))
@@ -70,7 +70,7 @@ class AoAScreenMapper {
 
         // 3) Rotate body-frame camera image to screen-frame.
         //
-        // CameraX rotates the preview image by the phone's roll angle θ so that
+        // CameraX rotates the analysis image by the phone's roll angle θ so that
         // "physical up" always appears as "screen up". We apply the same rotation
         // to the UWB projection coordinates.
         //
