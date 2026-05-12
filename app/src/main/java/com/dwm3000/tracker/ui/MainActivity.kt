@@ -5,32 +5,20 @@ import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.os.Bundle
 import android.util.Log
-import android.util.Size
 import android.view.View
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.resolutionselector.ResolutionSelector
-import androidx.camera.core.resolutionselector.ResolutionStrategy
-import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
-import com.dwm3000.tracker.UwbSessionParams
-import com.dwm3000.tracker.ble.BleCentral
-import com.dwm3000.tracker.ble.BlePeripheral
+import com.dwm3000.tracker.camera.CameraAnalysisController
 import com.dwm3000.tracker.databinding.ActivityMainBinding
-import com.dwm3000.tracker.fusion.UwbImuFusionManager
+import com.dwm3000.tracker.ranging.RangingSessionCoordinator
 import com.dwm3000.tracker.uwb.UwbRangingManager
-import com.dwm3000.tracker.vision.FaceAnalysis
-import kotlinx.coroutines.launch
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
 
@@ -38,21 +26,12 @@ class MainActivity : AppCompatActivity() {
         private const val TAG = "MainActivity"
         // Stage 2: privacy-processed camera image + AR reticle + radar enabled.
         private const val STAGE_2 = true
-        private val FACE_ANALYSIS_SIZE = Size(640, 480)
     }
 
     private lateinit var binding: ActivityMainBinding
-    private var uwbRangingManager: UwbRangingManager? = null
-    private var bleCentral: BleCentral? = null
-    private var blePeripheral: BlePeripheral? = null
-    private var cameraAnalysis: ImageAnalysis? = null
-    private var faceAnalysis: FaceAnalysis? = null
-    private lateinit var cameraAnalysisExecutor: ExecutorService
+    private lateinit var cameraController: CameraAnalysisController
+    private lateinit var rangingCoordinator: RangingSessionCoordinator
     private var gravitySensor: GravityRollSensor? = null
-    private lateinit var uwbImuFusion: UwbImuFusionManager
-
-    private val sessionId = UwbSessionParams.generateSessionId()
-    private val sessionKey = UwbSessionParams.generateSessionKey()
 
     private val requiredPermissions = arrayOf(
         Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_ADVERTISE,
@@ -73,12 +52,20 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
         hideSystemBars()
         binding.hudTop.post { updateFaceStatsPosition() }
-        cameraAnalysisExecutor = Executors.newSingleThreadExecutor()
-        uwbImuFusion = UwbImuFusionManager(this) { fused ->
-            renderTelemetry(fused)
+        cameraController = CameraAnalysisController(this, this) { bitmap, faces, stats ->
+            binding.faceBlurOverlay.post {
+                binding.faceBlurOverlay.updateDetections(bitmap, faces, stats)
+            }
         }
-
-        uwbRangingManager = UwbRangingManager(this)
+        rangingCoordinator = RangingSessionCoordinator(
+            context = this,
+            scope = lifecycleScope,
+            onStatusChanged = ::updateStatus,
+            onRangingStarted = { showTelemetry(true) },
+            onRangingUpdate = ::renderTelemetry,
+            onStartFailed = { setButtonsEnabled(true) },
+            onPeerLost = { clearPeerTelemetry() }
+        )
 
         if (STAGE_2) {
             CameraFovHelper.getRearCameraFov(this)?.let {
@@ -100,22 +87,20 @@ class MainActivity : AppCompatActivity() {
         }.toTypedArray())
     }
 
-    override fun onResume() { super.onResume(); gravitySensor?.start(); uwbImuFusion.start() }
-    override fun onPause() { super.onPause(); gravitySensor?.stop(); uwbImuFusion.stop() }
+    override fun onResume() { super.onResume(); gravitySensor?.start(); rangingCoordinator.startSensors() }
+    override fun onPause() { super.onPause(); gravitySensor?.stop(); rangingCoordinator.stopSensors() }
     override fun onDestroy() {
         super.onDestroy()
         stopEverything()
+        rangingCoordinator.close()
         binding.faceBlurOverlay.clearDetections()
-        cameraAnalysis?.clearAnalyzer()
-        faceAnalysis?.close()
-        faceAnalysis = null
-        cameraAnalysisExecutor.shutdown()
+        cameraController.close()
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         @Suppress("DEPRECATION")
-        cameraAnalysis?.targetRotation = windowManager.defaultDisplay.rotation
+        cameraController.updateRotation(windowManager.defaultDisplay.rotation)
         hideSystemBars()
         binding.hudTop.post { updateFaceStatsPosition() }
     }
@@ -129,42 +114,7 @@ class MainActivity : AppCompatActivity() {
 
     @Suppress("DEPRECATION")
     private fun startCamera() {
-        val f = ProcessCameraProvider.getInstance(this)
-        f.addListener({
-            val prov = f.get()
-            cameraAnalysis?.clearAnalyzer()
-            faceAnalysis?.close()
-            faceAnalysis = null
-            val resolutionSelector = ResolutionSelector.Builder()
-                .setResolutionStrategy(
-                    ResolutionStrategy(
-                        FACE_ANALYSIS_SIZE,
-                        ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER
-                    )
-                )
-                .build()
-            val analysis = ImageAnalysis.Builder()
-                .setResolutionSelector(resolutionSelector)
-                .setTargetRotation(windowManager.defaultDisplay.rotation)
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-                .build()
-                .also {
-                    val analyzer = FaceAnalysis(this) { bitmap, faces, stats ->
-                        binding.faceBlurOverlay.post {
-                            binding.faceBlurOverlay.updateDetections(bitmap, faces, stats)
-                        }
-                    }
-                    faceAnalysis = analyzer
-                    it.setAnalyzer(
-                        cameraAnalysisExecutor,
-                        analyzer
-                    )
-                }
-            cameraAnalysis = analysis
-            try { prov.unbindAll(); prov.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, analysis) }
-            catch (e: Exception) { Log.e(TAG, "Camera failed", e) }
-        }, ContextCompat.getMainExecutor(this))
+        cameraController.start(windowManager.defaultDisplay.rotation)
     }
 
     private fun hasAllPermissions() = requiredPermissions.all {
@@ -173,52 +123,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun startAsController() {
         if (!hasAllPermissions()) return
-        setButtonsEnabled(false); updateStatus("Controller: Preparing UWB...")
-        lifecycleScope.launch {
-            try {
-                val s = uwbRangingManager!!.prepareControllerScope()
-                updateStatus("Controller: Scanning BLE...")
-                bleCentral = BleCentral(this@MainActivity, sessionId, s.channel, s.preambleIndex, sessionKey, s.localAddress) { addr ->
-                    runOnUiThread { updateStatus("Starting UWB..."); bleCentral?.stop(); startUwbController(addr) }
-                }
-                bleCentral?.start()
-            } catch (e: Exception) { Log.e(TAG, "Err", e); updateStatus("Error: ${e.message}"); setButtonsEnabled(true) }
-        }
-    }
-
-    private fun startUwbController(addr: ByteArray) {
-        updateStatus("Ranging active"); showTelemetry(true)
-        uwbRangingManager?.startAsController(lifecycleScope, sessionId, sessionKey, addr,
-            { d -> runOnUiThread { updateTelemetry(d) } },
-            { m -> runOnUiThread { updateStatus("Error: $m") } },
-            { runOnUiThread { onPeerLost() } })
+        setButtonsEnabled(false)
+        rangingCoordinator.startController()
     }
 
     private fun startAsControlee() {
         if (!hasAllPermissions()) return
-        setButtonsEnabled(false); updateStatus("Controlee: Preparing UWB...")
-        lifecycleScope.launch {
-            try {
-                val s = uwbRangingManager!!.prepareControleeScope()
-                updateStatus("Controlee: Advertising BLE...")
-                blePeripheral = BlePeripheral(this@MainActivity, s.localAddress) { sid, ch, pre, key, addr ->
-                    runOnUiThread { updateStatus("Starting UWB..."); blePeripheral?.stop(); startUwbControlee(sid, ch, pre, key, addr) }
-                }
-                blePeripheral?.start()
-            } catch (e: Exception) { Log.e(TAG, "Err", e); updateStatus("Error: ${e.message}"); setButtonsEnabled(true) }
-        }
-    }
-
-    private fun startUwbControlee(sid: Int, ch: Int, pre: Int, key: ByteArray, addr: ByteArray) {
-        updateStatus("Ranging active"); showTelemetry(true)
-        uwbRangingManager?.startAsControlee(lifecycleScope, sid, ch, pre, key, addr,
-            { d -> runOnUiThread { updateTelemetry(d) } },
-            { m -> runOnUiThread { updateStatus("Error: $m") } },
-            { runOnUiThread { onPeerLost() } })
-    }
-
-    private fun updateTelemetry(d: UwbRangingManager.RangingData) {
-        renderTelemetry(uwbImuFusion.processUwb(d))
+        setButtonsEnabled(false)
+        rangingCoordinator.startControlee()
     }
 
     private fun renderTelemetry(d: UwbRangingManager.RangingData) {
@@ -245,20 +157,13 @@ class MainActivity : AppCompatActivity() {
         binding.llButtons.visibility = if (on) View.VISIBLE else View.GONE
         binding.btnStop.visibility = if (on) View.GONE else View.VISIBLE
     }
-    private fun onPeerLost() {
-        updateStatus("Peer disconnected")
-        uwbImuFusion.reset()
+    private fun clearPeerTelemetry() {
         if (STAGE_2) { binding.arOverlay.clearPeer(); binding.radarView.clearPeer() }
         binding.tvDistance.text = "--.- m"; binding.tvAzimuth.text = "--.-°"; binding.tvElevation.text = "--.-°"
     }
     private fun stopEverything() {
-        bleCentral?.stop(); blePeripheral?.stop(); uwbRangingManager?.stopRanging()
-        bleCentral = null; blePeripheral = null
-        uwbImuFusion.reset()
-        if (STAGE_2) { binding.arOverlay.clearPeer(); binding.radarView.clearPeer() }
-        binding.tvDistance.text = "--.- m"; binding.tvAzimuth.text = "--.-°"; binding.tvElevation.text = "--.-°"
+        rangingCoordinator.stop()
+        clearPeerTelemetry()
         showTelemetry(false); setButtonsEnabled(true); updateStatus("Stopped. Select a role.")
     }
 }
-
-private fun ByteArray.toHex(): String = joinToString("") { "%02X".format(it) }
