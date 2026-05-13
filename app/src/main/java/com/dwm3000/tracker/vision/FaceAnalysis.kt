@@ -148,10 +148,7 @@ class FaceAnalysis(
         val renderTimestampNs = latestEligibleFrameTimestamp(targetNs) ?: return
 
         applyCnnResultsThrough(renderTimestampNs)
-        if (!tracker.hasValidStateForFrame(renderTimestampNs)) {
-            pruneFrameBuffer(latestFrameNs)
-            return
-        }
+        val hasTrackingState = tracker.hasValidStateForFrame(renderTimestampNs)
 
         var frameToRender: BufferedFrame? = null
         while (frameBuffer.isNotEmpty() && frameBuffer.first.timestampNs <= renderTimestampNs) {
@@ -161,20 +158,21 @@ class FaceAnalysis(
         }
 
         val frame = frameToRender ?: return
-        val prediction = tracker.predictForFrame(
-            frame.timestampNs,
-            frame.bitmap.width,
-            frame.bitmap.height
-        )
-        if (prediction.faces.isEmpty()) {
-            frame.bitmap.recycle()
-            return
+        val prediction = if (hasTrackingState) {
+            tracker.predictForFrame(
+                frame.timestampNs,
+                frame.bitmap.width,
+                frame.bitmap.height
+            )
+        } else {
+            null
         }
+        val faces = prediction?.faces.orEmpty()
 
         lastTotalAnalysisMs = (System.nanoTime() - totalStartNs) / 1_000_000f
         onResult(
             frame.bitmap,
-            prediction.faces,
+            faces,
             FaceDetectionStats(
                 detectorName = activeDetectorName,
                 frameFps = smoothedFps,
@@ -183,14 +181,14 @@ class FaceAnalysis(
                 conversionMs = lastConversionMs,
                 inferenceMs = lastInferenceMs,
                 totalAnalysisMs = lastTotalAnalysisMs,
-                faceCount = prediction.faces.size,
-                faceSource = prediction.faceSource,
+                faceCount = faces.size,
+                faceSource = prediction?.faceSource ?: "NONE",
                 detectorIntervalMs = detectorIntervalMs,
-                predictionAgeMs = prediction.predictionAgeMs,
-                imuShiftX = prediction.imuShiftX,
-                imuShiftY = prediction.imuShiftY,
-                uwbShiftX = prediction.uwbShiftX,
-                uwbShiftY = prediction.uwbShiftY
+                predictionAgeMs = prediction?.predictionAgeMs ?: 0f,
+                imuShiftX = prediction?.imuShiftX ?: 0f,
+                imuShiftY = prediction?.imuShiftY ?: 0f,
+                uwbShiftX = prediction?.uwbShiftX ?: 0f,
+                uwbShiftY = prediction?.uwbShiftY ?: 0f
             )
         )
     }

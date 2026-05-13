@@ -6,7 +6,6 @@
 - OpenCV YuNet is the primary face detector; MediaPipe/BlazeFace is fallback only when YuNet cannot initialize.
 - `CameraAnalysisController` owns CameraX analysis setup and detector lifecycle.
 - `RangingSessionCoordinator` owns BLE role setup, UWB ranging, and the current UWB/IMU telemetry fusion path.
-- Full-screen fail-closed blur is disabled while detector behavior is being debugged.
 
 ## Timestamp Discussion Summary
 
@@ -39,10 +38,10 @@ CameraX frame
             run CNN on worker thread
             queue CNN result by original frame timestamp
     |
-    |-- render only buffered frames whose timestamp has matching CNN/tracker state
+    |-- render delayed buffered frames and apply bbox when tracker state is available
 ```
 
-If CNN is still processing, the app skips the next CNN request instead of buffering more CNN snapshots. Display frames are held briefly so the blur bbox is computed for the same timestamp as the bitmap being shown. If no valid CNN/tracked bbox exists, the frame is not displayed as raw video.
+If CNN is still processing, the app skips the next CNN request instead of buffering more CNN snapshots. Display frames are held briefly so the blur bbox is computed for the same timestamp as the bitmap being shown. If no valid CNN/tracked bbox exists, the delayed frame is displayed without a face patch.
 
 ## Implemented Tracking Modules
 
