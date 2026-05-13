@@ -16,13 +16,13 @@ That full time-alignment problem is intentionally deferred. The first tracking v
 
 ## V1 Scope
 
-- Track one person/face only.
+- Blur all detected face patches, with lightweight propagation between CNN results.
 - Run CNN at most once every 200 ms.
 - Delay video display slightly so the bbox matches the displayed bitmap.
 - Store a small display frame buffer and at most one copied CNN snapshot.
 - Predict face bbox between CNN results using:
   - local camera phone gyroscope,
-  - latest UWB range/AoA signal.
+  - latest UWB range/AoA signal only when there is a single tracked face.
 - Defer sender IMU over BLE, multi-person UWB association, and cross-device clock alignment.
 
 ## V1 Frame Pipeline

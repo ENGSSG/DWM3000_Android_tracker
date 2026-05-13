@@ -54,8 +54,10 @@ class FacePredictionTracker(
         imageHeight: Int
     ) {
         synchronized(lock) {
-            val selectedFace = faces.maxByOrNull { it.score }
-            if (selectedFace == null) {
+            val detectedFaces = faces
+                .sortedByDescending { it.score }
+                .take(MAX_TRACKED_FACES)
+            if (detectedFaces.isEmpty()) {
                 if (lastDetectionNs == 0L ||
                     frameTimestampNs - lastDetectionNs > MAX_PREDICTION_AGE_NS
                 ) {
@@ -64,13 +66,13 @@ class FacePredictionTracker(
                 return
             }
 
-            trackedFaces = listOf(selectedFace)
+            trackedFaces = detectedFaces
             lastDetectionNs = frameTimestampNs
             lastStateNs = frameTimestampNs
             stateImageWidth = imageWidth
             stateImageHeight = imageHeight
             pendingFreshCnn = true
-            updateUwbAnchorLocked(selectedFace, imageWidth, imageHeight)
+            updateUwbAnchorLocked(imageWidth, imageHeight)
         }
     }
 
@@ -150,6 +152,7 @@ class FacePredictionTracker(
     }
 
     private fun computeUwbCorrectionLocked(imageWidth: Int, imageHeight: Int): PointF {
+        if (trackedFaces.size != 1) return PointF()
         val offset = uwbFaceOffset ?: return PointF()
         val signals = signalStore.snapshot()
         val uwb = signals.latestUwb ?: return PointF()
@@ -170,7 +173,13 @@ class FacePredictionTracker(
         return correction
     }
 
-    private fun updateUwbAnchorLocked(face: DetectedFace, imageWidth: Int, imageHeight: Int) {
+    private fun updateUwbAnchorLocked(imageWidth: Int, imageHeight: Int) {
+        val face = if (trackedFaces.size == 1) trackedFaces.first() else null
+        if (face == null) {
+            uwbFaceOffset = null
+            return
+        }
+
         val signals = signalStore.snapshot()
         val uwb = signals.latestUwb ?: run {
             uwbFaceOffset = null
@@ -305,5 +314,6 @@ class FacePredictionTracker(
         private const val MAX_UWB_SHIFT_PER_FRAME_PX = 24f
         private const val MIN_PIXEL_SHIFT = 0.1f
         private const val PARALLAX_LIMIT_M = 15f
+        private const val MAX_TRACKED_FACES = 16
     }
 }

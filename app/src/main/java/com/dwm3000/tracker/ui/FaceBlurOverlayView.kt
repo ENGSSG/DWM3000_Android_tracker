@@ -157,6 +157,7 @@ class FaceBlurOverlayView @JvmOverloads constructor(
         )
         val privacyText = when {
             fullFrameCensored -> "Full-frame privacy"
+            drewFacePatch && s.faceCount > 1 -> "Face patches"
             drewFacePatch -> "Face patch"
             else -> "No face patch"
         }
