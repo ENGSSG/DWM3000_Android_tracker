@@ -11,6 +11,8 @@ import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
+import com.dwm3000.tracker.tracking.CameraImuMotionBuffer
+import com.dwm3000.tracker.tracking.TrackingSignalStore
 import com.dwm3000.tracker.vision.DetectedFace
 import com.dwm3000.tracker.vision.FaceAnalysis
 import com.dwm3000.tracker.vision.FaceDetectionStats
@@ -20,15 +22,18 @@ import java.util.concurrent.Executors
 class CameraAnalysisController(
     private val context: Context,
     private val lifecycleOwner: LifecycleOwner,
+    private val trackingSignalStore: TrackingSignalStore,
     private val analysisSize: Size = DEFAULT_ANALYSIS_SIZE,
     private val onFaceResult: (Bitmap, List<DetectedFace>, FaceDetectionStats) -> Unit
 ) : AutoCloseable {
 
     private val analysisExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+    private val motionBuffer = CameraImuMotionBuffer(context.applicationContext)
     private var cameraProvider: ProcessCameraProvider? = null
     private var cameraAnalysis: ImageAnalysis? = null
     private var faceAnalysis: FaceAnalysis? = null
     private var closed = false
+    private var cameraFov: CameraFov? = null
 
     fun start(targetRotation: Int) {
         closed = false
@@ -52,10 +57,17 @@ class CameraAnalysisController(
         cameraAnalysis?.targetRotation = targetRotation
     }
 
+    fun setCameraFov(horizontalDeg: Float, verticalDeg: Float) {
+        cameraFov = CameraFov(horizontalDeg, verticalDeg)
+        motionBuffer.setCameraFov(horizontalDeg, verticalDeg)
+        faceAnalysis?.setCameraFov(horizontalDeg, verticalDeg)
+    }
+
     fun stop() {
         cameraAnalysis?.clearAnalyzer()
         faceAnalysis?.close()
         faceAnalysis = null
+        motionBuffer.stop()
 
         cameraAnalysis?.let { analysis ->
             try {
@@ -75,10 +87,12 @@ class CameraAnalysisController(
 
     private fun bindAnalysis(provider: ProcessCameraProvider, targetRotation: Int) {
         stop()
+        if (!closed) motionBuffer.start()
 
-        val analyzer = FaceAnalysis(context) { bitmap, faces, stats ->
+        val analyzer = FaceAnalysis(context, motionBuffer, trackingSignalStore) { bitmap, faces, stats ->
             onFaceResult(bitmap, faces, stats)
         }
+        cameraFov?.let { analyzer.setCameraFov(it.horizontalDeg, it.verticalDeg) }
         faceAnalysis = analyzer
 
         val analysis = ImageAnalysis.Builder()
@@ -115,4 +129,9 @@ class CameraAnalysisController(
         private const val TAG = "CameraAnalysisController"
         private val DEFAULT_ANALYSIS_SIZE = Size(640, 480)
     }
+
+    private data class CameraFov(
+        val horizontalDeg: Float,
+        val verticalDeg: Float
+    )
 }

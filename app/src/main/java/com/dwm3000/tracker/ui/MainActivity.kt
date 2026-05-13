@@ -18,6 +18,7 @@ import androidx.lifecycle.lifecycleScope
 import com.dwm3000.tracker.camera.CameraAnalysisController
 import com.dwm3000.tracker.databinding.ActivityMainBinding
 import com.dwm3000.tracker.ranging.RangingSessionCoordinator
+import com.dwm3000.tracker.tracking.TrackingSignalStore
 import com.dwm3000.tracker.uwb.UwbRangingManager
 
 class MainActivity : AppCompatActivity() {
@@ -31,6 +32,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var cameraController: CameraAnalysisController
     private lateinit var rangingCoordinator: RangingSessionCoordinator
+    private val trackingSignalStore = TrackingSignalStore()
     private var gravitySensor: GravityRollSensor? = null
 
     private val requiredPermissions = arrayOf(
@@ -52,7 +54,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
         hideSystemBars()
         binding.hudTop.post { updateFaceStatsPosition() }
-        cameraController = CameraAnalysisController(this, this) { bitmap, faces, stats ->
+        cameraController = CameraAnalysisController(this, this, trackingSignalStore) { bitmap, faces, stats ->
             binding.faceBlurOverlay.post {
                 binding.faceBlurOverlay.updateDetections(bitmap, faces, stats)
             }
@@ -64,16 +66,19 @@ class MainActivity : AppCompatActivity() {
             onRangingStarted = { showTelemetry(true) },
             onRangingUpdate = ::renderTelemetry,
             onStartFailed = { setButtonsEnabled(true) },
-            onPeerLost = { clearPeerTelemetry() }
+            onPeerLost = { clearPeerTelemetry() },
+            onRawRangingUpdate = { trackingSignalStore.updateUwb(it) }
         )
 
         if (STAGE_2) {
             CameraFovHelper.getRearCameraFov(this)?.let {
                 Log.d(TAG, "Camera FoV: H=${it.horizontalDeg} V=${it.verticalDeg}")
                 binding.arOverlay.mapper.setCameraFov(it.horizontalDeg, it.verticalDeg)
+                cameraController.setCameraFov(it.horizontalDeg, it.verticalDeg)
             }
             gravitySensor = GravityRollSensor(this) { rollRad ->
                 binding.arOverlay.mapper.rollRad = rollRad
+                trackingSignalStore.updateCameraRoll(rollRad)
             }
         }
 
@@ -158,6 +163,7 @@ class MainActivity : AppCompatActivity() {
         binding.btnStop.visibility = if (on) View.GONE else View.VISIBLE
     }
     private fun clearPeerTelemetry() {
+        trackingSignalStore.clearUwb()
         if (STAGE_2) { binding.arOverlay.clearPeer(); binding.radarView.clearPeer() }
         binding.tvDistance.text = "--.- m"; binding.tvAzimuth.text = "--.-°"; binding.tvElevation.text = "--.-°"
     }

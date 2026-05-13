@@ -144,7 +144,7 @@ class FaceBlurOverlayView @JvmOverloads constructor(
         val right = width.coerceAtMost(760).toFloat()
         canvas.drawRect(left, top, right, top + STATS_PANEL_HEIGHT, panelPaint)
         canvas.drawText(
-            "${s.detectorName} ${s.faceCount} face(s) ${s.frameWidth}x${s.frameHeight}",
+            "${s.detectorName} ${s.faceSource} ${s.faceCount} face(s) ${s.frameWidth}x${s.frameHeight}",
             24f,
             top + 30f,
             textPaint
@@ -161,9 +161,15 @@ class FaceBlurOverlayView @JvmOverloads constructor(
             else -> "No face patch"
         }
         canvas.drawText(
-            "$privacyText  Camera ${s.frameFps.format1()} FPS",
+            "$privacyText  Camera ${s.frameFps.format1()} FPS  Age ${s.predictionAgeMs.format1()} ms",
             24f,
             top + 94f,
+            textPaint
+        )
+        canvas.drawText(
+            "IMU ${s.imuShiftX.format1()},${s.imuShiftY.format1()} px  UWB ${s.uwbShiftX.format1()},${s.uwbShiftY.format1()} px",
+            24f,
+            top + 126f,
             textPaint
         )
     }
@@ -202,6 +208,6 @@ class FaceBlurOverlayView @JvmOverloads constructor(
 
     companion object {
         private const val PRIVACY_FAIL_CLOSED = false
-        private const val STATS_PANEL_HEIGHT = 106f
+        private const val STATS_PANEL_HEIGHT = 138f
     }
 }

@@ -17,5 +17,11 @@ data class FaceDetectionStats(
     val inferenceMs: Float,
     val totalAnalysisMs: Float,
     val faceCount: Int,
-    val faceSource: String = "CNN"
+    val faceSource: String = "CNN",
+    val detectorIntervalMs: Long = 0L,
+    val predictionAgeMs: Float = 0f,
+    val imuShiftX: Float = 0f,
+    val imuShiftY: Float = 0f,
+    val uwbShiftX: Float = 0f,
+    val uwbShiftY: Float = 0f
 )

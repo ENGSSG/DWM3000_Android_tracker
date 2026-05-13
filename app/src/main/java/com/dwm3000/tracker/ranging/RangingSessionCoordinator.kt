@@ -19,7 +19,8 @@ class RangingSessionCoordinator(
     private val onRangingStarted: () -> Unit,
     private val onRangingUpdate: (UwbRangingManager.RangingData) -> Unit,
     private val onStartFailed: () -> Unit,
-    private val onPeerLost: () -> Unit
+    private val onPeerLost: () -> Unit,
+    private val onRawRangingUpdate: (UwbRangingManager.RangingData) -> Unit = {}
 ) : AutoCloseable {
 
     private val appContext = context.applicationContext
@@ -159,6 +160,7 @@ class RangingSessionCoordinator(
             { raw ->
                 dispatchToMain {
                     if (isCurrentStart(generation)) {
+                        onRawRangingUpdate(raw)
                         onRangingUpdate(fusionManager.processUwb(raw))
                     }
                 }
@@ -198,6 +200,7 @@ class RangingSessionCoordinator(
             { raw ->
                 dispatchToMain {
                     if (isCurrentStart(generation)) {
+                        onRawRangingUpdate(raw)
                         onRangingUpdate(fusionManager.processUwb(raw))
                     }
                 }
