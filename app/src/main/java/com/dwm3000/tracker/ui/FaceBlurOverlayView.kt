@@ -11,6 +11,7 @@ import android.util.AttributeSet
 import android.view.View
 import com.dwm3000.tracker.vision.DetectedFace
 import com.dwm3000.tracker.vision.FaceDetectionStats
+import com.dwm3000.tracker.vision.UNTRACKED_FACE_ID
 import kotlin.math.max
 
 class FaceBlurOverlayView @JvmOverloads constructor(
@@ -48,6 +49,15 @@ class FaceBlurOverlayView @JvmOverloads constructor(
         color = Color.WHITE
         textSize = 23f
         setShadowLayer(5f, 0f, 2f, Color.BLACK)
+    }
+    private val faceLabelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#FFFFD54F")
+        textSize = 22f
+        setShadowLayer(4f, 0f, 2f, Color.BLACK)
+    }
+    private val faceLabelBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#99000000")
+        style = Paint.Style.FILL
     }
     private val panelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#77000000")
@@ -103,6 +113,7 @@ class FaceBlurOverlayView @JvmOverloads constructor(
             drawPixelatedFace(canvas, bitmap, srcRect, mappedRect)
             drewFacePatch = true
             canvas.drawRect(mappedRect, boxPaint)
+            drawFaceLabel(canvas, face, mappedRect)
             drawLandmarks(canvas, face, bitmap.width, bitmap.height)
         }
 
@@ -137,6 +148,30 @@ class FaceBlurOverlayView @JvmOverloads constructor(
         }
     }
 
+    private fun drawFaceLabel(canvas: Canvas, face: DetectedFace, rect: RectF) {
+        val trackLabel = if (face.trackId == UNTRACKED_FACE_ID) "#?" else "#${face.trackId}"
+        val association = face.uwbAssociation
+        val label = when (association?.state) {
+            "MATCH" -> "$trackLabel UWB ${(association.confidence * 100f).toInt()}%"
+            "AMBIG" -> "$trackLabel UWB?"
+            "CAND" -> "$trackLabel candidate"
+            "BUFFER" -> "$trackLabel buffering"
+            else -> trackLabel
+        }
+
+        val textWidth = faceLabelPaint.measureText(label)
+        val labelX = rect.left.coerceIn(8f, (width - textWidth - 12f).coerceAtLeast(8f))
+        val labelY = (rect.top - 8f).coerceAtLeast(statsTopInsetPx + 24f)
+        canvas.drawRect(
+            labelX - 6f,
+            labelY - 24f,
+            labelX + textWidth + 6f,
+            labelY + 7f,
+            faceLabelBgPaint
+        )
+        canvas.drawText(label, labelX, labelY, faceLabelPaint)
+    }
+
     private fun drawStats(canvas: Canvas, drewFacePatch: Boolean, fullFrameCensored: Boolean) {
         val s = stats ?: return
         val left = 12f
@@ -168,9 +203,15 @@ class FaceBlurOverlayView @JvmOverloads constructor(
             textPaint
         )
         canvas.drawText(
-            "IMU ${s.imuShiftX.format1()},${s.imuShiftY.format1()} px  UWB ${s.uwbShiftX.format1()},${s.uwbShiftY.format1()} px",
+            s.uwbAssociationSummary,
             24f,
             top + 126f,
+            textPaint
+        )
+        canvas.drawText(
+            "IMU ${s.imuShiftX.format1()},${s.imuShiftY.format1()} px  UWB ${s.uwbShiftX.format1()},${s.uwbShiftY.format1()} px",
+            24f,
+            top + 158f,
             textPaint
         )
     }
@@ -209,6 +250,6 @@ class FaceBlurOverlayView @JvmOverloads constructor(
 
     companion object {
         private const val PRIVACY_FAIL_CLOSED = false
-        private const val STATS_PANEL_HEIGHT = 138f
+        private const val STATS_PANEL_HEIGHT = 170f
     }
 }

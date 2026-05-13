@@ -5,7 +5,17 @@ import android.graphics.RectF
 data class DetectedFace(
     val bbox: RectF,
     val score: Float,
-    val landmarks: List<Pair<Float, Float>> = emptyList()
+    val landmarks: List<Pair<Float, Float>> = emptyList(),
+    val trackId: Int = UNTRACKED_FACE_ID,
+    val uwbAssociation: FaceUwbAssociation? = null
+)
+
+data class FaceUwbAssociation(
+    val state: String,
+    val confidence: Float,
+    val cost: Float,
+    val margin: Float,
+    val sampleCount: Int
 )
 
 data class FaceDetectionStats(
@@ -23,5 +33,8 @@ data class FaceDetectionStats(
     val imuShiftX: Float = 0f,
     val imuShiftY: Float = 0f,
     val uwbShiftX: Float = 0f,
-    val uwbShiftY: Float = 0f
+    val uwbShiftY: Float = 0f,
+    val uwbAssociationSummary: String = "UWB assoc: none"
 )
+
+const val UNTRACKED_FACE_ID = 0

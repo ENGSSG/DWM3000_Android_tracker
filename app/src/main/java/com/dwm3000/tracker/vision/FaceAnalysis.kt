@@ -190,7 +190,8 @@ class FaceAnalysis(
                 imuShiftX = prediction.imuShiftX,
                 imuShiftY = prediction.imuShiftY,
                 uwbShiftX = prediction.uwbShiftX,
-                uwbShiftY = prediction.uwbShiftY
+                uwbShiftY = prediction.uwbShiftY,
+                uwbAssociationSummary = prediction.associationSummary
             )
         )
     }

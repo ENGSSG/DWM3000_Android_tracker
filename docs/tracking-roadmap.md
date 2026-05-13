@@ -23,7 +23,7 @@ That full time-alignment problem is intentionally deferred. The first tracking v
 - Predict face bbox between CNN results using:
   - local camera phone gyroscope,
   - latest UWB range/AoA signal only when there is a single tracked face.
-- Defer sender IMU over BLE, multi-person UWB association, and cross-device clock alignment.
+- Defer sender IMU over BLE, multiple UWB sender support, and cross-device clock alignment.
 
 ## V1 Frame Pipeline
 
@@ -58,6 +58,9 @@ If CNN is still processing, the app skips the next CNN request instead of buffer
   - stores the latest CNN face bbox,
   - predicts bbox movement frame-to-frame,
   - uses local IMU shift and weak UWB projection correction,
+  - keeps stable face track IDs for detected faces,
+  - buffers recent face and UWB projection trajectories,
+  - scores the UWB signal against each face using a front-pocket image-plane prior,
   - marks each output as `CNN`, `TRACKED`, or `NONE`.
 
 ## Deferred Work
@@ -65,5 +68,5 @@ If CNN is still processing, the app skips the next CNN request instead of buffer
 - Stream sender IMU values over BLE.
 - Add remote clock synchronization.
 - Use a proper bounded timestamp buffer for multiple asynchronous sensor sources.
-- Associate multiple UWB senders with multiple faces.
+- Extend the current single-UWB-to-face association to multiple UWB senders and opt-out identities.
 - Replace heuristic tracking with a formal filter after measurements are reliable.
