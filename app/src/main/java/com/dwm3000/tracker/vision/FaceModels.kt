@@ -22,6 +22,13 @@ data class FaceDetectionStats(
     val predictionAgeMs: Float = 0f,
     val imuShiftX: Float = 0f,
     val imuShiftY: Float = 0f,
+    val translationShiftX: Float = 0f,
+    val translationShiftY: Float = 0f,
+    val roiShiftX: Float = 0f,
+    val roiShiftY: Float = 0f,
+    val roiPointCount: Int = 0,
+    val roiUsed: Boolean = false,
+    val depthMeters: Float = 0f,
     val uwbShiftX: Float = 0f,
     val uwbShiftY: Float = 0f
 )

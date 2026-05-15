@@ -1,16 +1,12 @@
 package com.dwm3000.tracker.tracking
 
+import android.graphics.Bitmap
 import android.graphics.PointF
 import android.graphics.RectF
 import android.os.SystemClock
 import com.dwm3000.tracker.CalibrationConfig
 import com.dwm3000.tracker.vision.DetectedFace
-import kotlin.math.atan2
 import kotlin.math.abs
-import kotlin.math.cos
-import kotlin.math.max
-import kotlin.math.sin
-import kotlin.math.tan
 
 data class FaceTrackingPrediction(
     val faces: List<DetectedFace>,
@@ -18,18 +14,43 @@ data class FaceTrackingPrediction(
     val predictionAgeMs: Float,
     val imuShiftX: Float,
     val imuShiftY: Float,
+    val translationShiftX: Float,
+    val translationShiftY: Float,
+    val roiShiftX: Float,
+    val roiShiftY: Float,
+    val roiPointCount: Int,
+    val roiUsed: Boolean,
+    val depthMeters: Float,
     val uwbShiftX: Float,
     val uwbShiftY: Float
-)
+) {
+    companion object {
+        fun empty() = FaceTrackingPrediction(
+            faces = emptyList(),
+            faceSource = "NONE",
+            predictionAgeMs = 0f,
+            imuShiftX = 0f,
+            imuShiftY = 0f,
+            translationShiftX = 0f,
+            translationShiftY = 0f,
+            roiShiftX = 0f,
+            roiShiftY = 0f,
+            roiPointCount = 0,
+            roiUsed = false,
+            depthMeters = 0f,
+            uwbShiftX = 0f,
+            uwbShiftY = 0f
+        )
+    }
+}
 
 class FacePredictionTracker(
     private val motionBuffer: CameraImuMotionBuffer,
-    private val signalStore: TrackingSignalStore,
-    private var horizontalFovDeg: Float = CalibrationConfig.getCalibration().fallbackHFovDeg,
-    private var verticalFovDeg: Float = CalibrationConfig.getCalibration().fallbackVFovDeg
+    private val signalStore: TrackingSignalStore
 ) {
 
     private val calibration = CalibrationConfig.getCalibration()
+    private val roiTracker = FaceRoiTracker()
     private val lock = Any()
 
     private var trackedFaces: List<DetectedFace> = emptyList()
@@ -37,15 +58,8 @@ class FacePredictionTracker(
     private var lastStateNs = 0L
     private var stateImageWidth = 0
     private var stateImageHeight = 0
-    private var uwbFaceOffset: PointF? = null
     private var pendingFreshCnn = false
-
-    fun setCameraFov(horizontalDeg: Float, verticalDeg: Float) {
-        synchronized(lock) {
-            horizontalFovDeg = horizontalDeg
-            verticalFovDeg = verticalDeg
-        }
-    }
+    private var smoothedDepthMeters: Float? = null
 
     fun onCnnResult(
         faces: List<DetectedFace>,
@@ -70,29 +84,30 @@ class FacePredictionTracker(
             stateImageWidth = imageWidth
             stateImageHeight = imageHeight
             pendingFreshCnn = true
-            updateUwbAnchorLocked(selectedFace, imageWidth, imageHeight)
+            roiTracker.reset()
         }
     }
 
     fun predictForFrame(
         frameTimestampNs: Long,
-        imageWidth: Int,
-        imageHeight: Int
+        bitmap: Bitmap
     ): FaceTrackingPrediction {
         synchronized(lock) {
             if (trackedFaces.isEmpty() || lastDetectionNs == 0L) {
-                return FaceTrackingPrediction(emptyList(), "NONE", 0f, 0f, 0f, 0f, 0f)
+                return FaceTrackingPrediction.empty()
             }
 
             val predictionAgeNs = frameTimestampNs - lastDetectionNs
             if (predictionAgeNs < 0L) {
-                return FaceTrackingPrediction(emptyList(), "NONE", 0f, 0f, 0f, 0f, 0f)
+                return FaceTrackingPrediction.empty()
             }
             if (predictionAgeNs > MAX_PREDICTION_AGE_NS) {
                 clearLocked()
-                return FaceTrackingPrediction(emptyList(), "NONE", 0f, 0f, 0f, 0f, 0f)
+                return FaceTrackingPrediction.empty()
             }
 
+            val imageWidth = bitmap.width
+            val imageHeight = bitmap.height
             if (stateImageWidth != imageWidth || stateImageHeight != imageHeight) {
                 trackedFaces = trackedFaces.scaleToImage(
                     stateImageWidth,
@@ -102,20 +117,34 @@ class FacePredictionTracker(
                 )
                 stateImageWidth = imageWidth
                 stateImageHeight = imageHeight
+                roiTracker.reset()
             }
 
-            val imuShift = motionBuffer.pixelShiftBetween(
+            val facesBeforeMotion = trackedFaces
+            val depthMeters = updateDepthEstimateLocked()
+            val motion = motionBuffer.imageMotionBetween(
                 lastStateNs,
                 frameTimestampNs,
                 imageWidth,
                 imageHeight
             )
-            val uwbShift = computeUwbCorrectionLocked(imageWidth, imageHeight)
-            val dx = imuShift.x + uwbShift.x
-            val dy = imuShift.y + uwbShift.y
+            val sensorPrediction = predictImageMotionLocked(motion, depthMeters, imageWidth, imageHeight)
+            val roiResult = if (facesBeforeMotion.isNotEmpty() && sensorPrediction.faces.isNotEmpty()) {
+                roiTracker.update(
+                    bitmap = bitmap,
+                    previousFace = facesBeforeMotion.first(),
+                    sensorPredictedFace = sensorPrediction.faces.first(),
+                    imageWidth = imageWidth,
+                    imageHeight = imageHeight
+                )
+            } else {
+                FaceRoiTrackingResult()
+            }
 
-            if (abs(dx) >= MIN_PIXEL_SHIFT || abs(dy) >= MIN_PIXEL_SHIFT) {
-                trackedFaces = trackedFaces.translateClamped(dx, dy, imageWidth, imageHeight)
+            trackedFaces = if (roiResult.used) {
+                facesBeforeMotion.translateClamped(roiResult.shift.x, roiResult.shift.y, imageWidth, imageHeight)
+            } else {
+                sensorPrediction.faces
             }
 
             lastStateNs = frameTimestampNs
@@ -126,10 +155,17 @@ class FacePredictionTracker(
                 faces = trackedFaces,
                 faceSource = source,
                 predictionAgeMs = predictionAgeNs.coerceAtLeast(0L) / 1_000_000f,
-                imuShiftX = imuShift.x,
-                imuShiftY = imuShift.y,
-                uwbShiftX = uwbShift.x,
-                uwbShiftY = uwbShift.y
+                imuShiftX = sensorPrediction.rotation.x,
+                imuShiftY = sensorPrediction.rotation.y,
+                translationShiftX = sensorPrediction.translation.x,
+                translationShiftY = sensorPrediction.translation.y,
+                roiShiftX = roiResult.shift.x,
+                roiShiftY = roiResult.shift.y,
+                roiPointCount = roiResult.pointCount,
+                roiUsed = roiResult.used,
+                depthMeters = depthMeters ?: 0f,
+                uwbShiftX = 0f,
+                uwbShiftY = 0f
             )
         }
     }
@@ -149,86 +185,32 @@ class FacePredictionTracker(
         }
     }
 
-    private fun computeUwbCorrectionLocked(imageWidth: Int, imageHeight: Int): PointF {
-        val offset = uwbFaceOffset ?: return PointF()
-        val signals = signalStore.snapshot()
-        val uwb = signals.latestUwb ?: return PointF()
-        val ageNs = SystemClock.elapsedRealtimeNanos() - uwb.receivedTimeNs
-        if (ageNs < 0L || ageNs > MAX_UWB_AGE_NS) return PointF()
-
-        val projection = projectUwbToImage(uwb, signals.cameraRollRad, imageWidth, imageHeight)
-        val targetX = projection.x + offset.x
-        val targetY = projection.y + offset.y
-        val currentFace = trackedFaces.firstOrNull() ?: return PointF()
-        val currentCenter = currentFace.bbox.center()
-
-        val correction = PointF(
-            (targetX - currentCenter.x) * UWB_BLEND,
-            (targetY - currentCenter.y) * UWB_BLEND
-        )
-        correction.limit(MAX_UWB_SHIFT_PER_FRAME_PX)
-        return correction
-    }
-
-    private fun updateUwbAnchorLocked(face: DetectedFace, imageWidth: Int, imageHeight: Int) {
-        val signals = signalStore.snapshot()
-        val uwb = signals.latestUwb ?: run {
-            uwbFaceOffset = null
-            return
-        }
-        val ageNs = SystemClock.elapsedRealtimeNanos() - uwb.receivedTimeNs
-        if (ageNs < 0L || ageNs > MAX_UWB_AGE_NS) {
-            uwbFaceOffset = null
-            return
-        }
-
-        val projection = projectUwbToImage(uwb, signals.cameraRollRad, imageWidth, imageHeight)
-        val faceCenter = face.bbox.center()
-        uwbFaceOffset = PointF(
-            faceCenter.x - projection.x,
-            faceCenter.y - projection.y
-        )
-    }
-
-    private fun projectUwbToImage(
-        uwb: TimedUwbSample,
-        rollRad: Float,
+    private fun predictImageMotionLocked(
+        motion: CameraImageMotion,
+        depthMeters: Float?,
         imageWidth: Int,
         imageHeight: Int
-    ): PointF {
-        var az = uwb.azimuthDegrees + calibration.azimuthBiasDeg
-        var el = uwb.elevationDegrees + calibration.elevationBiasDeg
-        if (uwb.distanceMeters < PARALLAX_LIMIT_M) {
-            val adjusted = applyParallax(az, el, uwb.distanceMeters)
-            az = adjusted.first
-            el = adjusted.second
+    ): MotionPrediction {
+        if (motion.isIdentity) {
+            return MotionPrediction(trackedFaces, PointF(), PointF())
+        }
+        val firstFace = trackedFaces.firstOrNull()
+            ?: return MotionPrediction(trackedFaces, PointF(), PointF())
+        val beforeCenter = firstFace.bbox.center()
+        val shiftedFaces = trackedFaces.projectCenters(motion, depthMeters, imageWidth, imageHeight)
+        val afterCenter = shiftedFaces.firstOrNull()?.bbox?.center()
+            ?: return MotionPrediction(trackedFaces, PointF(), PointF())
+        val total = PointF(afterCenter.x - beforeCenter.x, afterCenter.y - beforeCenter.y)
+        val faces = if (abs(total.x) >= MIN_PIXEL_SHIFT || abs(total.y) >= MIN_PIXEL_SHIFT) {
+            shiftedFaces
+        } else {
+            trackedFaces
         }
 
-        val tx = tan(Math.toRadians(az.toDouble())).toFloat()
-        val ty = tan(Math.toRadians(el.toDouble())).toFloat()
-        val cosR = cos(rollRad)
-        val sinR = sin(rollRad)
-        val rx = tx * cosR + ty * sinR
-        val ry = -tx * sinR + ty * cosR
-        val f = (max(imageWidth, imageHeight) / 2f) /
-            tan(Math.toRadians((horizontalFovDeg / 2f).toDouble())).toFloat()
-
-        return PointF(
-            imageWidth / 2f + f * rx,
-            imageHeight / 2f - f * ry
-        )
-    }
-
-    private fun applyParallax(azimuthDeg: Float, elevationDeg: Float, distanceM: Float): Pair<Float, Float> {
-        val az = Math.toRadians(azimuthDeg.toDouble())
-        val el = Math.toRadians(elevationDeg.toDouble())
-        val cosEl = cos(el)
-        val px = distanceM * sin(az) * cosEl - calibration.uwbToCameraOffsetX
-        val py = distanceM * sin(el) - calibration.uwbToCameraOffsetY
-        val pz = distanceM * cos(az) * cosEl - calibration.uwbToCameraOffsetZ
-        return Pair(
-            Math.toDegrees(atan2(px, pz)).toFloat(),
-            Math.toDegrees(atan2(py, Math.sqrt(px * px + pz * pz))).toFloat()
+        return MotionPrediction(
+            faces = faces,
+            rotation = motion.rotationShiftAt(beforeCenter.x, beforeCenter.y),
+            translation = motion.translationPixelShift(depthMeters)
         )
     }
 
@@ -238,21 +220,44 @@ class FacePredictionTracker(
         lastStateNs = 0L
         stateImageWidth = 0
         stateImageHeight = 0
-        uwbFaceOffset = null
         pendingFreshCnn = false
+        smoothedDepthMeters = null
+        roiTracker.reset()
     }
 
-    private fun List<DetectedFace>.translateClamped(
-        dx: Float,
-        dy: Float,
+    private fun updateDepthEstimateLocked(): Float? {
+        val uwb = signalStore.snapshot().latestUwb ?: return smoothedDepthMeters
+        val ageNs = SystemClock.elapsedRealtimeNanos() - uwb.receivedTimeNs
+        if (ageNs < 0L || ageNs > MAX_UWB_DEPTH_AGE_NS) return smoothedDepthMeters
+
+        val measuredDepth = (uwb.distanceMeters - calibration.uwbToCameraOffsetZ)
+            .takeIf { it.isFinite() && it > 0f }
+            ?.coerceIn(MIN_DEPTH_METERS, MAX_DEPTH_METERS)
+            ?: return smoothedDepthMeters
+
+        smoothedDepthMeters = smoothedDepthMeters?.let { previous ->
+            previous * (1f - DEPTH_SMOOTHING_ALPHA) + measuredDepth * DEPTH_SMOOTHING_ALPHA
+        } ?: measuredDepth
+        return smoothedDepthMeters
+    }
+
+    private fun List<DetectedFace>.projectCenters(
+        motion: CameraImageMotion,
+        depthMeters: Float?,
         imageWidth: Int,
         imageHeight: Int
     ): List<DetectedFace> {
         return map { face ->
-            val shiftedBox = face.bbox.translateClamped(dx, dy, imageWidth, imageHeight)
+            val center = face.bbox.center()
+            val projectedCenter = motion.project(center.x, center.y, depthMeters) ?: center
+            val requestedDx = projectedCenter.x - center.x
+            val requestedDy = projectedCenter.y - center.y
+            val shiftedBox = face.bbox.translateClamped(requestedDx, requestedDy, imageWidth, imageHeight)
+            val actualDx = shiftedBox.centerX() - face.bbox.centerX()
+            val actualDy = shiftedBox.centerY() - face.bbox.centerY()
             val shiftedLandmarks = face.landmarks.map { (x, y) ->
-                (x + dx).coerceIn(0f, imageWidth.toFloat()) to
-                    (y + dy).coerceIn(0f, imageHeight.toFloat())
+                (x + actualDx).coerceIn(0f, imageWidth.toFloat()) to
+                    (y + actualDy).coerceIn(0f, imageHeight.toFloat())
             }
             face.copy(bbox = shiftedBox, landmarks = shiftedLandmarks)
         }
@@ -280,6 +285,24 @@ class FacePredictionTracker(
         }
     }
 
+    private fun List<DetectedFace>.translateClamped(
+        dx: Float,
+        dy: Float,
+        imageWidth: Int,
+        imageHeight: Int
+    ): List<DetectedFace> {
+        return map { face ->
+            val shiftedBox = face.bbox.translateClamped(dx, dy, imageWidth, imageHeight)
+            val actualDx = shiftedBox.centerX() - face.bbox.centerX()
+            val actualDy = shiftedBox.centerY() - face.bbox.centerY()
+            val shiftedLandmarks = face.landmarks.map { (x, y) ->
+                (x + actualDx).coerceIn(0f, imageWidth.toFloat()) to
+                    (y + actualDy).coerceIn(0f, imageHeight.toFloat())
+            }
+            face.copy(bbox = shiftedBox, landmarks = shiftedLandmarks)
+        }
+    }
+
     private fun RectF.translateClamped(dx: Float, dy: Float, imageWidth: Int, imageHeight: Int): RectF {
         val boxWidth = width()
         val boxHeight = height()
@@ -290,20 +313,18 @@ class FacePredictionTracker(
 
     private fun RectF.center() = PointF(centerX(), centerY())
 
-    private fun PointF.limit(maxNorm: Float) {
-        val norm = kotlin.math.sqrt(x * x + y * y)
-        if (norm <= maxNorm || norm == 0f) return
-        val scale = maxNorm / norm
-        x *= scale
-        y *= scale
-    }
+    private data class MotionPrediction(
+        val faces: List<DetectedFace>,
+        val rotation: PointF,
+        val translation: PointF
+    )
 
     private companion object {
         private const val MAX_PREDICTION_AGE_NS = 1_000_000_000L
-        private const val MAX_UWB_AGE_NS = 500_000_000L
-        private const val UWB_BLEND = 0.25f
-        private const val MAX_UWB_SHIFT_PER_FRAME_PX = 24f
+        private const val MAX_UWB_DEPTH_AGE_NS = 750_000_000L
+        private const val MIN_DEPTH_METERS = 0.45f
+        private const val MAX_DEPTH_METERS = 8.0f
+        private const val DEPTH_SMOOTHING_ALPHA = 0.25f
         private const val MIN_PIXEL_SHIFT = 0.1f
-        private const val PARALLAX_LIMIT_M = 15f
     }
 }

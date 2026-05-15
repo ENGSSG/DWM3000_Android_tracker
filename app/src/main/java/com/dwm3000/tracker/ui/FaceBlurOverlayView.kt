@@ -153,8 +153,13 @@ class FaceBlurOverlayView @JvmOverloads constructor(
             top + 94f,
             textPaint
         )
+        val roiText = if (s.roiUsed) {
+            "ROI ${s.roiShiftX.format1()},${s.roiShiftY.format1()} px ${s.roiPointCount}p"
+        } else {
+            "ROI -- ${s.roiPointCount}p"
+        }
         canvas.drawText(
-            "IMU ${s.imuShiftX.format1()},${s.imuShiftY.format1()} px  UWB ${s.uwbShiftX.format1()},${s.uwbShiftY.format1()} px",
+            "Rot ${s.imuShiftX.format1()},${s.imuShiftY.format1()}  Trans ${s.translationShiftX.format1()},${s.translationShiftY.format1()}  $roiText  Depth ${s.depthMeters.formatDepth()}",
             24f,
             top + 126f,
             textPaint
@@ -192,6 +197,10 @@ class FaceBlurOverlayView @JvmOverloads constructor(
     }
 
     private fun Float.format1(): String = String.format("%.1f", this)
+
+    private fun Float.formatDepth(): String {
+        return if (this > 0f) String.format("%.2f m", this) else "--"
+    }
 
     companion object {
         private const val STATS_PANEL_HEIGHT = 138f

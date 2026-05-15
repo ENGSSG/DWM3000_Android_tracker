@@ -88,7 +88,7 @@ class FaceAnalysis(
     }
 
     fun setCameraFov(horizontalDeg: Float, verticalDeg: Float) {
-        tracker.setCameraFov(horizontalDeg, verticalDeg)
+        motionBuffer.setCameraFov(horizontalDeg, verticalDeg)
     }
 
     private fun maybeStartCnn(bitmap: Bitmap, frameNs: Long) {
@@ -161,8 +161,7 @@ class FaceAnalysis(
         val prediction = if (hasTrackingState) {
             tracker.predictForFrame(
                 frame.timestampNs,
-                frame.bitmap.width,
-                frame.bitmap.height
+                frame.bitmap
             )
         } else {
             null
@@ -187,6 +186,13 @@ class FaceAnalysis(
                 predictionAgeMs = prediction?.predictionAgeMs ?: 0f,
                 imuShiftX = prediction?.imuShiftX ?: 0f,
                 imuShiftY = prediction?.imuShiftY ?: 0f,
+                translationShiftX = prediction?.translationShiftX ?: 0f,
+                translationShiftY = prediction?.translationShiftY ?: 0f,
+                roiShiftX = prediction?.roiShiftX ?: 0f,
+                roiShiftY = prediction?.roiShiftY ?: 0f,
+                roiPointCount = prediction?.roiPointCount ?: 0,
+                roiUsed = prediction?.roiUsed ?: false,
+                depthMeters = prediction?.depthMeters ?: 0f,
                 uwbShiftX = prediction?.uwbShiftX ?: 0f,
                 uwbShiftY = prediction?.uwbShiftY ?: 0f
             )
